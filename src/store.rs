@@ -831,15 +831,7 @@ mod tests {
     /// Skeptic: Normal override of sticky mute must survive save → load → rebind.
     #[test]
     fn sticky_mute_normal_override_survives_save_load_rebind() {
-        use std::sync::Mutex;
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _g = LOCK.lock().unwrap();
-
-        let dir = std::env::temp_dir().join(format!("termorg-sticky-mute-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("TERMORG_CONFIG_DIR", &dir);
-
+        // Pure path: no TERMORG_CONFIG_DIR (avoids races with signals tests).
         let mut state = UserState::default();
         let s = sess("kitty:w1:t1", "/tmp/sticky-mute-roundtrip", "zsh");
         let (key, _) = crate::hints::path_key_for_session(&s).expect("path key");
@@ -847,7 +839,6 @@ mod tests {
         assert_eq!(state.priority_for(&s), Priority::Muted);
         state.set_priority(&s, Priority::Normal);
         assert_eq!(state.priority_for(&s), Priority::Normal);
-        // Pref must be marked meaningful via explicit_priority.
         assert!(
             state
                 .session_prefs
@@ -856,31 +847,40 @@ mod tests {
             "expected explicit Normal pref: {:?}",
             state.session_prefs
         );
-        state.save().unwrap();
 
-        // Simulate new process: load drops non-meaningful prefs.
-        let loaded = UserState::load().unwrap();
+        // Disk shape: serde + retain_persisted_prefs (same as UserState::load).
+        let raw = serde_json::to_string(&state).expect("serialize");
+        let mut loaded: UserState = serde_json::from_str(&raw).expect("deserialize");
+        loaded.retain_persisted_prefs();
         assert_eq!(
             loaded.priority_for(&s),
             Priority::Normal,
-            "after load, sticky mute must stay shadowed"
+            "after load retain, sticky mute must stay shadowed"
         );
 
-        // rebind with same live id must not drop the override.
-        let mut loaded2 = loaded;
-        let _ = loaded2.rebind_stale_session_ids(std::slice::from_ref(&s));
+        let _ = loaded.rebind_stale_session_ids(std::slice::from_ref(&s));
         assert_eq!(
-            loaded2.priority_for(&s),
+            loaded.priority_for(&s),
             Priority::Normal,
             "after rebind, sticky mute must stay shadowed"
         );
 
-        // load_and_rebind public path
-        let via = load_and_rebind(std::slice::from_ref(&s)).unwrap();
-        assert_eq!(via.priority_for(&s), Priority::Normal);
-
-        let _ = fs::remove_dir_all(&dir);
-        std::env::remove_var("TERMORG_CONFIG_DIR");
+        // Negative: Normal without explicit_priority is dropped → mute returns.
+        let mut bare = UserState::default();
+        bare.set_path_mute(&key, true).unwrap();
+        bare.session_prefs.push(SessionPref {
+            provider: s.provider.clone(),
+            match_rule: SessionMatch::ProviderId { id: s.id.clone() },
+            manual_group_id: None,
+            priority: Priority::Normal,
+            explicit_priority: false,
+            cwd: s.cwd.clone(),
+            title: Some(s.title.clone()),
+            updated_at: 1,
+        });
+        bare.retain_persisted_prefs();
+        assert!(bare.session_prefs.is_empty());
+        assert_eq!(bare.priority_for(&s), Priority::Muted);
     }
 
     #[test]
