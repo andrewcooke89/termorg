@@ -19,7 +19,8 @@ use crate::filter::{self, session_matches};
 use crate::hints::{self, PathHintSuggestion};
 use crate::notify::NotifyTracker;
 use crate::provider::{
-    MultiProvider, ProviderKind, LaunchKind, LaunchRequest, ProviderSession, TerminalProvider,
+    session_matches_native_id, LaunchKind, LaunchRequest, MultiProvider, ProviderKind,
+    ProviderSession, TerminalProvider,
 };
 use crate::queue::build_action_queue;
 use crate::store::{
@@ -330,12 +331,10 @@ impl PanelState {
                             let found = sessions
                                 .iter()
                                 .find(|s| {
-                                    result.native_id.as_ref().is_some_and(|nid| {
-                                        s.id.contains(nid.as_str())
-                                            || s.focus_key
-                                                .as_deref()
-                                                .is_some_and(|k| k.contains(nid.as_str()))
-                                    })
+                                    result
+                                        .native_id
+                                        .as_ref()
+                                        .is_some_and(|nid| session_matches_native_id(s, nid))
                                 })
                                 .or_else(|| {
                                     sessions.iter().find(|s| {

@@ -641,28 +641,26 @@ fn find_launched_session<'a>(
     sessions: &'a [provider::ProviderSession],
     result: &provider::LaunchResult,
 ) -> Option<&'a provider::ProviderSession> {
-    // tmux: native_id is `@N`; match via focus_key / id / focus_window_id
+    // Exact native_id match only — never substring (`@1` must not hit `@10`).
     if let Some(ref nid) = result.native_id {
-        if let Some(s) = sessions.iter().find(|s| {
-            s.id.contains(nid.as_str())
-                || s.focus_key
-                    .as_deref()
-                    .is_some_and(|k| k.contains(nid.as_str()))
-                || s.focus_window_id
-                    .map(|w| format!("@{w}") == *nid || w.to_string() == *nid)
-                    .unwrap_or(false)
-        }) {
+        if let Some(s) = sessions
+            .iter()
+            .find(|s| provider::session_matches_native_id(s, nid))
+        {
             return Some(s);
         }
     }
     if let Some(wid) = result.window_id {
+        // Exact numeric window id; prefer endpoint agreement when available.
         if let Some(s) = sessions.iter().find(|s| {
             s.focus_window_id == Some(wid)
                 && (s.focus_endpoint.as_deref() == Some(result.endpoint.as_str())
-                    || s.focus_key
-                        .as_deref()
-                        .is_some_and(|k| k.starts_with(&format!("{}:", result.endpoint))))
+                    || result.endpoint.is_empty()
+                    || s.provider == "tmux") // tmux endpoint is session name, not socket tag
         }) {
+            return Some(s);
+        }
+        if let Some(s) = sessions.iter().find(|s| s.focus_window_id == Some(wid)) {
             return Some(s);
         }
     }

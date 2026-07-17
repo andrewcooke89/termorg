@@ -138,6 +138,40 @@ pub struct LaunchResult {
     pub native_id: Option<String>,
 }
 
+/// Exact match of a listed session against a launch `native_id`.
+///
+/// Must **not** use substring search: tmux `@1` must not match `@10`/`@11`/…
+/// Compares the id tail after the last `:`, `focus_window_id`, and the window
+/// token in `focus_key` (`session:@N|%pane`).
+pub fn session_matches_native_id(session: &ProviderSession, native_id: &str) -> bool {
+    let nid = native_id.trim();
+    if nid.is_empty() {
+        return false;
+    }
+    if session.id == nid {
+        return true;
+    }
+    // e.g. `tmux:default:@12` → `@12`
+    if session.id.rsplit(':').next() == Some(nid) {
+        return true;
+    }
+    if let Some(w) = session.focus_window_id {
+        if format!("@{w}") == nid || w.to_string() == nid {
+            return true;
+        }
+    }
+    // focus_key window token (tmux `session:@N` or `session:@N|%pane`)
+    if let Some(ref key) = session.focus_key {
+        let base = key.split('|').next().unwrap_or(key.as_str());
+        if let Some(win) = base.rsplit(':').next() {
+            if win == nid {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Abstract access to a terminal host.
 pub trait TerminalProvider: Send + Sync {
     fn provider_id(&self) -> &str;
@@ -186,6 +220,25 @@ pub trait TerminalProvider: Send + Sync {
 #[cfg(test)]
 mod launch_tests {
     use super::*;
+    use crate::agent::AgentClass;
+    use crate::attention::Attention;
+
+    fn sess(id: &str, focus_key: Option<&str>, focus_window_id: Option<u32>) -> ProviderSession {
+        ProviderSession {
+            provider: "tmux".into(),
+            id: id.into(),
+            title: "t".into(),
+            cwd: None,
+            is_focused: false,
+            os_window_id: None,
+            focus_endpoint: None,
+            focus_tab_id: None,
+            focus_window_id,
+            focus_key: focus_key.map(|s| s.into()),
+            agent: AgentClass::Shell,
+            attention: Attention::Idle,
+        }
+    }
 
     #[test]
     fn launch_kind_parse() {
@@ -194,5 +247,20 @@ mod launch_tests {
         assert!(LaunchKind::parse("nope").is_none());
         assert!(LaunchKind::Claude.command_argv().contains(&"claude".into()));
         assert!(LaunchKind::Shell.command_argv().is_empty());
+    }
+
+    #[test]
+    fn native_id_at1_does_not_match_at10() {
+        let s10 = sess("tmux:default:@10", Some("work:@10|%1"), Some(10));
+        let s11 = sess("tmux:default:@11", Some("work:@11|%2"), Some(11));
+        let s1 = sess("tmux:default:@1", Some("work:@1|%0"), Some(1));
+        assert!(!session_matches_native_id(&s10, "@1"));
+        assert!(!session_matches_native_id(&s11, "@1"));
+        assert!(session_matches_native_id(&s1, "@1"));
+        assert!(session_matches_native_id(&s10, "@10"));
+        // @1 absent among @10/@11 only
+        let list = [s10, s11];
+        assert!(list.iter().all(|s| !session_matches_native_id(s, "@1")));
+        assert!(list.iter().any(|s| session_matches_native_id(s, "@10")));
     }
 }

@@ -20,6 +20,6 @@ pub mod ui;
 
 pub use error::{Result, TermorgError};
 pub use provider::{
-    KittyProvider, LaunchKind, LaunchRequest, MultiProvider, ProviderKind, ProviderSession,
-    TerminalProvider, TmuxProvider,
+    session_matches_native_id, KittyProvider, LaunchKind, LaunchRequest, MultiProvider,
+    ProviderKind, ProviderSession, TerminalProvider, TmuxProvider,
 };

@@ -460,19 +460,19 @@ impl TerminalProvider for TmuxProvider {
 
     fn prefer_launch_endpoint(&self, cwd: Option<&str>) -> Option<String> {
         let sessions = self.list_sessions().ok()?;
+        let session_name = |s: &ProviderSession| -> Option<String> {
+            s.focus_key
+                .as_ref()
+                .and_then(|k| Self::parse_focus_key(k).map(|(sess, _, _)| sess.to_string()))
+        };
         if let Some(c) = cwd {
             if let Some(s) = sessions.iter().find(|s| s.cwd.as_deref() == Some(c)) {
-                // return session name from focus_key
-                if let Some(ref k) = s.focus_key {
-                    return k.split('|').next()?.split(':').next().map(|s| s.to_string());
+                if let Some(name) = session_name(s) {
+                    return Some(name);
                 }
             }
         }
-        sessions.into_iter().find_map(|s| {
-            s.focus_key
-                .as_ref()
-                .and_then(|k| k.split('|').next()?.split(':').next().map(|s| s.to_string()))
-        })
+        sessions.into_iter().find_map(|s| session_name(&s))
     }
 }
 
@@ -547,6 +547,34 @@ other\t@20\t1\tbash\t1\t/tmp\t99\tbash\t0\t%1
         assert_eq!(pane2, None);
         assert!(TmuxProvider::parse_focus_key("").is_none());
         assert!(TmuxProvider::parse_focus_key("nocolon").is_none());
+    }
+
+    #[test]
+    fn prefer_endpoint_uses_parse_focus_key_for_colon_session() {
+        // Synthetic list line with a session name containing ':'.
+        // prefer_launch_endpoint must return the full name, not truncated at first ':'.
+        let sessions = TmuxProvider::parse_windows_output(
+            "proj:main\t@7\t0\tsh\t0\t/tmp/colon-proj\t1\tzsh\t0\t%3\n",
+            "sock",
+        );
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].focus_key.as_deref(),
+            Some("proj:main:@7|%3")
+        );
+        let name = sessions[0]
+            .focus_key
+            .as_ref()
+            .and_then(|k| TmuxProvider::parse_focus_key(k).map(|(s, _, _)| s.to_string()));
+        assert_eq!(name.as_deref(), Some("proj:main"));
+        // Old bug: split(':').next() → "proj"
+        let truncated = sessions[0]
+            .focus_key
+            .as_ref()
+            .and_then(|k| k.split('|').next()?.split(':').next())
+            .map(|s| s.to_string());
+        assert_eq!(truncated.as_deref(), Some("proj"));
+        assert_ne!(name, truncated);
     }
 
     #[test]
@@ -659,13 +687,22 @@ other\t@20\t1\tbash\t1\t/tmp\t99\tbash\t0\t%1
         let after = provider.list_sessions().expect("list after launch");
         assert!(after.len() >= 2, "expected ≥2 windows, got {}", after.len());
         let nid = launched.native_id.as_deref().unwrap();
-        assert!(
-            after.iter().any(|s| s.id.contains(nid)
-                || s.focus_key
-                    .as_deref()
-                    .is_some_and(|k| k.contains(nid))),
-            "launched {nid} not found in {after:?}"
+        let found = after
+            .iter()
+            .find(|s| crate::provider::session_matches_native_id(s, nid))
+            .unwrap_or_else(|| panic!("launched {nid} not found exactly in {after:?}"));
+        assert_eq!(found.id.rsplit(':').next(), Some(nid));
+        assert_eq!(
+            found.focus_window_id,
+            launched.window_id,
+            "focus_window_id must equal launch window_id"
         );
+        // Ensure @1-style prefix confusion cannot pass: if nid is @N, no other id tail may match.
+        for s in &after {
+            if crate::provider::session_matches_native_id(s, nid) {
+                assert_eq!(s.id.rsplit(':').next(), Some(nid));
+            }
+        }
 
         // agent-kind launch path (command string); may exit quickly if binary missing —
         // only assert the window appears when launch returns Ok.
@@ -678,8 +715,11 @@ other\t@20\t1\tbash\t1\t/tmp\t99\tbash\t0\t%1
             let again = provider.list_sessions().expect("list claude");
             let nid2 = l2.native_id.as_deref().unwrap_or("");
             assert!(
-                again.iter().any(|s| s.id.contains(nid2)),
-                "claude window {nid2} missing"
+                !nid2.is_empty()
+                    && again
+                        .iter()
+                        .any(|s| crate::provider::session_matches_native_id(s, nid2)),
+                "claude window {nid2} missing exactly in {again:?}"
             );
         }
 
