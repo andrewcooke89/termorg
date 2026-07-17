@@ -1247,18 +1247,16 @@ impl eframe::App for PanelState {
                             ui.add_space(6.0);
                             match sec {
                                 DisplaySection::Manual { group, sessions } => {
+                                    let tab_meta = if sessions.len() == 1 {
+                                        "1 tab · manual".to_string()
+                                    } else {
+                                        format!("{} tabs · manual", sessions.len())
+                                    };
                                     th::section_header(
                                         ui,
                                         "◆",
                                         &group.title,
-                                        &format!(
-                                            "{} · manual",
-                                            if sessions.len() == 1 {
-                                                "1 tab".into()
-                                            } else {
-                                                format!("{} tabs", sessions.len())
-                                            }
-                                        ),
+                                        &tab_meta,
                                         th::AMBER,
                                     );
                                     for (mi, s) in sessions.iter().enumerate() {
@@ -1294,20 +1292,12 @@ impl eframe::App for PanelState {
                                     path_hint,
                                     sessions,
                                 } => {
-                                    th::section_header(
-                                        ui,
-                                        "▶",
-                                        title,
-                                        &format!(
-                                            "{}",
-                                            if sessions.len() == 1 {
-                                                "1 tab".into()
-                                            } else {
-                                                format!("{} tabs", sessions.len())
-                                            }
-                                        ),
-                                        th::BLUE,
-                                    );
+                                    let tab_meta = if sessions.len() == 1 {
+                                        "1 tab".to_string()
+                                    } else {
+                                        format!("{} tabs", sessions.len())
+                                    };
+                                    th::section_header(ui, "▶", title, &tab_meta, th::BLUE);
                                     if path_hint != title && !path_hint.is_empty() {
                                         ui.label(
                                             RichText::new(rows::collapse_home(path_hint))
