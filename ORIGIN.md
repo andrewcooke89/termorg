@@ -1,19 +1,11 @@
 # Origin
 
-This repository was **extracted** from a private research tree:
+This repository was extracted from a private research project that compared
+implementation workflows for the same product plan.
 
-- Research root: `tools/terminal_organiser/`
-- Implementation arm: `workflows/interactive-default/`
-- Product freeze: `base/` (PLAN, FEATURE-SETS, DECISIONS, DATA-MODEL)
+- Implementation arm: interactive agent + human collaboration
+- Product design docs: preserved under `docs/product/`
+- Experiment metrics, wall-clock logs, and alternate arms were **not** copied
 
-The research tree also contains multi-workflow experiment logs, wall-clock metrics,
-and alternate implementation arms. **Those were not copied here.**
-
-Next steps planned:
-
-1. Cleanup (structure, readability, no monoliths, OSS-ready README)
-2. Multi-provider support (beyond Kitty)
-3. Future utility / open source polish
-
-This copy is a starting point for that work and should not be mixed back into
-the experiment arms during ongoing research comparisons.
+Subsequent work on this tree (cleanup, multi-provider, releases) is independent
+of the research comparison.

@@ -158,9 +158,8 @@ impl NotifyTracker {
         }
 
         self.prev.retain(|id, _| seen.contains(id));
-        self.last_sent.retain(|id, t| {
-            seen.contains(id) && now.duration_since(*t) < cooldown * 4
-        });
+        self.last_sent
+            .retain(|id, t| seen.contains(id) && now.duration_since(*t) < cooldown * 4);
     }
 }
 
@@ -198,11 +197,9 @@ pub fn notify_from_signal(sig: &AgentSignal) {
     let key = sig
         .agent_session_id
         .clone()
-        .or_else(|| {
-            match (&sig.kitty_pid, sig.kitty_window_id) {
-                (Some(p), Some(w)) => Some(format!("{p}:{w}")),
-                _ => sig.cwd.clone(),
-            }
+        .or_else(|| match (&sig.kitty_pid, sig.kitty_window_id) {
+            (Some(p), Some(w)) => Some(format!("{p}:{w}")),
+            _ => sig.cwd.clone(),
         })
         .unwrap_or_else(|| "unknown".into());
 
@@ -214,7 +211,10 @@ pub fn notify_from_signal(sig: &AgentSignal) {
             Err(_) => return,
         };
         let map = guard.get_or_insert_with(HashMap::new);
-        if map.get(&key).is_some_and(|t| now.duration_since(*t) < cooldown) {
+        if map
+            .get(&key)
+            .is_some_and(|t| now.duration_since(*t) < cooldown)
+        {
             return;
         }
         map.insert(key.clone(), now);
@@ -347,6 +347,6 @@ mod tests {
         let st = UserState::default();
         t.process(&[sess("b", Attention::NeedsYou, false)], &st);
         // first observation of id should not notify
-        assert!(t.last_sent.get("b").is_none());
+        assert!(!t.last_sent.contains_key("b"));
     }
 }

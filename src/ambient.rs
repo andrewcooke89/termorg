@@ -12,7 +12,6 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::AgentClass;
 use crate::attention::Attention;
 use crate::provider::{KittyProvider, ProviderSession};
 
@@ -284,8 +283,7 @@ impl AmbientApplier {
             let _ = provider.set_tab_title(session, &title);
         }
 
-        self.last
-            .insert(session.id.clone(), (color_sig, title));
+        self.last.insert(session.id.clone(), (color_sig, title));
     }
 }
 
@@ -313,11 +311,7 @@ mod tests {
 
     #[test]
     fn needs_you_color_not_none() {
-        let c = tab_colors(&sess(
-            AgentClass::Claude,
-            Attention::NeedsYou,
-            "hi",
-        ));
+        let c = tab_colors(&sess(AgentClass::Claude, Attention::NeedsYou, "hi"));
         assert_ne!(c.sig, "none");
         assert!(c.args.iter().any(|a| a.starts_with("active_bg=#")));
     }

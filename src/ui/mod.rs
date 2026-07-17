@@ -1,4 +1,9 @@
-//! Ops panel (eframe/egui) — FS3–FS10.
+//! Ops panel (eframe/egui).
+
+mod rows;
+mod theme;
+
+use rows::RowAction;
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -41,9 +46,7 @@ pub fn run_panel(provider: KittyProvider) -> Result<(), String> {
     let _ = std::fs::remove_file(&sock);
     let listener = std::os::unix::net::UnixListener::bind(&sock)
         .map_err(|e| format!("could not bind panel socket {}: {e}", sock.display()))?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|e| e.to_string())?;
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
 
     let show_flag = Arc::new(AtomicBool::new(false));
     let quit_flag = Arc::new(AtomicBool::new(false));
@@ -125,7 +128,7 @@ pub fn run_panel(provider: KittyProvider) -> Result<(), String> {
         "Terminal Organiser",
         options,
         Box::new(move |cc| {
-            apply_theme(&cc.egui_ctx);
+            theme::apply_theme(&cc.egui_ctx);
             Ok(Box::new(state))
         }),
     )
@@ -155,24 +158,6 @@ fn try_send_cmd(sock: &PathBuf, cmd: &str) -> bool {
         }
         Err(_) => false,
     }
-}
-
-fn apply_theme(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = Vec2::new(8.0, 6.0);
-    style.spacing.button_padding = Vec2::new(10.0, 6.0);
-    ctx.set_style(style);
-
-    let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = Color32::from_rgb(26, 27, 38);
-    visuals.window_fill = Color32::from_rgb(26, 27, 38);
-    visuals.override_text_color = Some(Color32::from_rgb(169, 177, 214));
-    visuals.widgets.noninteractive.fg_stroke.color = Color32::from_rgb(169, 177, 214);
-    visuals.widgets.inactive.fg_stroke.color = Color32::from_rgb(169, 177, 214);
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(36, 40, 59);
-    visuals.widgets.active.bg_fill = Color32::from_rgb(41, 46, 66);
-    visuals.selection.bg_fill = Color32::from_rgb(61, 89, 161);
-    ctx.set_visuals(visuals);
 }
 
 struct PanelState {
@@ -307,11 +292,7 @@ impl PanelState {
             p.prefer_endpoint_for_cwd(cwd.as_deref())
         };
         let group = self.launch_group.trim().to_string();
-        let group = if group.is_empty() {
-            None
-        } else {
-            Some(group)
-        };
+        let group = if group.is_empty() { None } else { Some(group) };
         let note = Arc::clone(&self.focus_note);
         let req = LaunchRequest {
             kind,
@@ -331,24 +312,26 @@ impl PanelState {
                     if let Some(ref g) = group {
                         thread::sleep(Duration::from_millis(450));
                         if let Ok(sessions) = provider.list_sessions() {
-                            let found = sessions.iter().find(|s| {
-                                result.window_id.is_some()
-                                    && s.focus_window_id == result.window_id
-                                    && s.focus_endpoint.as_deref()
-                                        == Some(result.endpoint.as_str())
-                            }).or_else(|| {
-                                sessions.iter().find(|s| {
-                                    s.focus_endpoint.as_deref()
-                                        == Some(result.endpoint.as_str())
-                                        && s.cwd == result.cwd
+                            let found = sessions
+                                .iter()
+                                .find(|s| {
+                                    result.window_id.is_some()
+                                        && s.focus_window_id == result.window_id
+                                        && s.focus_endpoint.as_deref()
+                                            == Some(result.endpoint.as_str())
                                 })
-                            });
+                                .or_else(|| {
+                                    sessions.iter().find(|s| {
+                                        s.focus_endpoint.as_deref()
+                                            == Some(result.endpoint.as_str())
+                                            && s.cwd == result.cwd
+                                    })
+                                });
                             if let Some(session) = found {
                                 match UserState::load() {
                                     Ok(mut st) => {
                                         if let Err(e) = st.assign(session, g) {
-                                            status =
-                                                format!("{status} · group assign failed: {e}");
+                                            status = format!("{status} · group assign failed: {e}");
                                         } else if let Err(e) = st.save() {
                                             status = format!("{status} · save failed: {e}");
                                         } else {
@@ -403,8 +386,9 @@ impl PanelState {
         let mut sections = build_display_sections(filtered, &self.user_state);
         if filtering {
             sections.retain(|sec| match sec {
-                DisplaySection::Manual { sessions, .. }
-                | DisplaySection::Auto { sessions, .. } => !sessions.is_empty(),
+                DisplaySection::Manual { sessions, .. } | DisplaySection::Auto { sessions, .. } => {
+                    !sessions.is_empty()
+                }
             });
         }
         self.sections = sections;
@@ -439,14 +423,14 @@ impl PanelState {
             }
         }
 
-        let shown: usize = self
-            .sections
-            .iter()
-            .map(|sec| match sec {
-                DisplaySection::Manual { sessions, .. }
-                | DisplaySection::Auto { sessions, .. } => sessions.len(),
-            })
-            .sum();
+        let shown: usize =
+            self.sections
+                .iter()
+                .map(|sec| match sec {
+                    DisplaySection::Manual { sessions, .. }
+                    | DisplaySection::Auto { sessions, .. } => sessions.len(),
+                })
+                .sum();
         let n_manual = self
             .sections
             .iter()
@@ -514,8 +498,9 @@ impl PanelState {
         }
         for (si, sec) in self.sections.iter().enumerate() {
             let members = match sec {
-                DisplaySection::Manual { sessions, .. }
-                | DisplaySection::Auto { sessions, .. } => sessions,
+                DisplaySection::Manual { sessions, .. } | DisplaySection::Auto { sessions, .. } => {
+                    sessions
+                }
             };
             if let Some(s) = members.first() {
                 self.selected = Some((si, 0));
@@ -538,8 +523,9 @@ impl PanelState {
         }
         for (si, sec) in self.sections.iter().enumerate() {
             let n = match sec {
-                DisplaySection::Manual { sessions, .. }
-                | DisplaySection::Auto { sessions, .. } => sessions.len(),
+                DisplaySection::Manual { sessions, .. } | DisplaySection::Auto { sessions, .. } => {
+                    sessions.len()
+                }
             };
             if n > 0 {
                 self.selected = Some((si, 0));
@@ -552,8 +538,9 @@ impl PanelState {
         let mut flat: Vec<(usize, usize)> = Vec::new();
         for (si, sec) in self.sections.iter().enumerate() {
             let n = match sec {
-                DisplaySection::Manual { sessions, .. }
-                | DisplaySection::Auto { sessions, .. } => sessions.len(),
+                DisplaySection::Manual { sessions, .. } | DisplaySection::Auto { sessions, .. } => {
+                    sessions.len()
+                }
             };
             for mi in 0..n {
                 flat.push((si, mi));
@@ -602,12 +589,7 @@ impl PanelState {
         if let Some(s) = self.action_queue.get(index).cloned() {
             self.queue_sel = Some(index);
             self.focus_session(&s);
-            self.status = format!(
-                "queue #{} → {} ({})",
-                index + 1,
-                s.id,
-                s.attention.label()
-            );
+            self.status = format!("queue #{} → {} ({})", index + 1, s.id, s.attention.label());
         }
     }
 
@@ -730,9 +712,7 @@ impl PanelState {
                     self.status = format!("save failed: {e}");
                     return;
                 }
-                self.status = format!(
-                    "deleted group {title} (tabs unassigned, not closed)"
-                );
+                self.status = format!("deleted group {title} (tabs unassigned, not closed)");
                 self.manual_groups = st.ordered_groups().into_iter().cloned().collect();
             }
             Err(e) => self.status = format!("load state: {e}"),
@@ -838,7 +818,11 @@ impl eframe::App for PanelState {
             ui.add_space(4.0);
             // FS10 search — Enter focuses first/selected match even while typing here.
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Filter").small().color(Color32::from_rgb(122, 162, 247)));
+                ui.label(
+                    RichText::new("Filter")
+                        .small()
+                        .color(Color32::from_rgb(122, 162, 247)),
+                );
                 let te = egui::TextEdit::singleline(&mut self.filter_query)
                     .desired_width(220.0)
                     .hint_text("title · path · agent · Enter = focus · / to jump here")
@@ -1029,9 +1013,7 @@ impl eframe::App for PanelState {
                         ui.label(
                             RichText::new(format!(
                                 "{} → ◆ {}  ({})",
-                                s.path_title,
-                                s.group_title,
-                                s.session_id
+                                s.path_title, s.group_title, s.session_id
                             ))
                             .small()
                             .color(Color32::from_rgb(192, 202, 245)),
@@ -1089,10 +1071,8 @@ impl eframe::App for PanelState {
                 for (qi, s) in self.action_queue.iter().enumerate() {
                     let pri = pri_map.get(&s.id).copied().unwrap_or(Priority::Normal);
                     let sel = qsel == Some(qi);
-                    let (rect, resp) = ui.allocate_exact_size(
-                        Vec2::new(ui.available_width(), 32.0),
-                        Sense::click(),
-                    );
+                    let (rect, resp) = ui
+                        .allocate_exact_size(Vec2::new(ui.available_width(), 32.0), Sense::click());
                     let fill = if sel {
                         Color32::from_rgb(55, 40, 48)
                     } else if resp.hovered() {
@@ -1100,14 +1080,17 @@ impl eframe::App for PanelState {
                     } else {
                         Color32::from_rgb(34, 28, 32)
                     };
-                    ui.painter()
-                        .rect_filled(rect, CornerRadius::same(5), fill);
+                    ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
                     let mut child = ui.new_child(
                         egui::UiBuilder::new()
                             .max_rect(rect.shrink2(Vec2::new(10.0, 4.0)))
                             .layout(egui::Layout::left_to_right(egui::Align::Center)),
                     );
-                    let star = if pri == Priority::Important { "★ " } else { "" };
+                    let star = if pri == Priority::Important {
+                        "★ "
+                    } else {
+                        ""
+                    };
                     child.label(
                         RichText::new(format!("{:>2}. {star}", qi + 1))
                             .color(Color32::from_rgb(224, 175, 104)),
@@ -1115,7 +1098,9 @@ impl eframe::App for PanelState {
                     let (ar, ag, ab) = s.agent.rgb();
                     child.colored_label(
                         Color32::from_rgb(ar, ag, ab),
-                        RichText::new(format!(" {} ", s.agent.label())).small().strong(),
+                        RichText::new(format!(" {} ", s.agent.label()))
+                            .small()
+                            .strong(),
                     );
                     let (tr, tg, tb) = s.attention.rgb();
                     child.colored_label(
@@ -1125,13 +1110,9 @@ impl eframe::App for PanelState {
                             .strong(),
                     );
                     child.label(
-                        RichText::new(format!(
-                            " {}  {}",
-                            s.id,
-                            s.title.replace('\n', " ")
-                        ))
-                        .small()
-                        .color(Color32::from_rgb(192, 202, 245)),
+                        RichText::new(format!(" {}  {}", s.id, s.title.replace('\n', " ")))
+                            .small()
+                            .color(Color32::from_rgb(192, 202, 245)),
                     );
                     ui.advance_cursor_after_rect(rect);
                     ui.add_space(3.0);
@@ -1207,12 +1188,16 @@ impl eframe::App for PanelState {
                                 );
                                 for (mi, s) in sessions.iter().enumerate() {
                                     let is_sel = selected == Some((si, mi));
-                                    let pri = pri_lookup
-                                        .get(&s.id)
-                                        .copied()
-                                        .unwrap_or(Priority::Normal);
-                                    let action =
-                                        session_row(ui, s, is_sel, true, pri, &groups_for_menu);
+                                    let pri =
+                                        pri_lookup.get(&s.id).copied().unwrap_or(Priority::Normal);
+                                    let action = rows::session_row(
+                                        ui,
+                                        s,
+                                        is_sel,
+                                        true,
+                                        pri,
+                                        &groups_for_menu,
+                                    );
                                     match action {
                                         RowAction::Focus => clicked = Some(s.clone()),
                                         RowAction::Assign(gid) => {
@@ -1244,19 +1229,23 @@ impl eframe::App for PanelState {
                                 );
                                 if path_hint != title && !path_hint.is_empty() {
                                     ui.label(
-                                        RichText::new(collapse_home(path_hint))
+                                        RichText::new(rows::collapse_home(path_hint))
                                             .small()
                                             .color(Color32::from_rgb(86, 95, 137)),
                                     );
                                 }
                                 for (mi, s) in sessions.iter().enumerate() {
                                     let is_sel = selected == Some((si, mi));
-                                    let pri = pri_lookup
-                                        .get(&s.id)
-                                        .copied()
-                                        .unwrap_or(Priority::Normal);
-                                    let action =
-                                        session_row(ui, s, is_sel, false, pri, &groups_for_menu);
+                                    let pri =
+                                        pri_lookup.get(&s.id).copied().unwrap_or(Priority::Normal);
+                                    let action = rows::session_row(
+                                        ui,
+                                        s,
+                                        is_sel,
+                                        false,
+                                        pri,
+                                        &groups_for_menu,
+                                    );
                                     match action {
                                         RowAction::Focus => clicked = Some(s.clone()),
                                         RowAction::Assign(gid) => {
@@ -1310,176 +1299,4 @@ impl eframe::App for PanelState {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.quit_flag.store(true, Ordering::Relaxed);
     }
-}
-
-fn collapse_home(path: &str) -> String {
-    if let Ok(home) = std::env::var("HOME") {
-        if path.starts_with(&home) {
-            return format!("~{}", &path[home.len()..]);
-        }
-    }
-    path.to_string()
-}
-
-enum RowAction {
-    None,
-    Focus,
-    Assign(String),
-    Unassign,
-    SetPriority(Priority),
-}
-
-fn session_row(
-    ui: &mut egui::Ui,
-    s: &ProviderSession,
-    selected: bool,
-    in_manual: bool,
-    priority: Priority,
-    groups: &[ManualGroup],
-) -> RowAction {
-    let focus = if s.is_focused { "●" } else { "○" };
-    let title = s.title.replace('\n', " ");
-    let title = if title.len() > 48 {
-        format!("{}…", &title[..45])
-    } else {
-        title
-    };
-    let cwd = s
-        .cwd
-        .as_deref()
-        .map(collapse_home)
-        .unwrap_or_else(|| "—".into());
-
-    let muted = priority == Priority::Muted;
-    let (rect, resp) = ui.allocate_exact_size(
-        Vec2::new(ui.available_width(), 40.0),
-        Sense::click(),
-    );
-    let fill = if selected {
-        Color32::from_rgb(45, 55, 90)
-    } else if muted {
-        Color32::from_rgb(24, 25, 32)
-    } else if priority == Priority::Important {
-        Color32::from_rgb(40, 38, 28)
-    } else if s.is_focused {
-        Color32::from_rgb(36, 40, 59)
-    } else if resp.hovered() {
-        Color32::from_rgb(34, 38, 56)
-    } else if in_manual {
-        Color32::from_rgb(32, 34, 42)
-    } else {
-        Color32::from_rgb(30, 32, 48)
-    };
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(6), fill);
-
-    let (ar, ag, ab) = s.agent.rgb();
-    let agent_color = if muted {
-        Color32::from_rgb(70, 75, 95)
-    } else {
-        Color32::from_rgb(ar, ag, ab)
-    };
-    let bar = egui::Rect::from_min_size(rect.min, Vec2::new(4.0, rect.height()));
-    ui.painter()
-        .rect_filled(bar, CornerRadius::same(2), agent_color);
-
-    let mut child = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(rect.shrink2(Vec2::new(12.0, 5.0)))
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    child.label(
-        RichText::new(format!("{focus}  ")).color(if s.is_focused {
-            Color32::from_rgb(158, 206, 106)
-        } else {
-            Color32::from_rgb(86, 95, 137)
-        }),
-    );
-    if priority == Priority::Important {
-        child.colored_label(
-            Color32::from_rgb(224, 175, 104),
-            RichText::new(" ★ ").strong(),
-        );
-    } else if muted {
-        child.colored_label(
-            Color32::from_rgb(86, 95, 137),
-            RichText::new(" · ").small(),
-        );
-    }
-    child.colored_label(
-        agent_color,
-        RichText::new(format!(" {} ", s.agent.label()))
-            .strong()
-            .small(),
-    );
-    let (tr, tg, tb) = s.attention.rgb();
-    let attn_color = if muted {
-        Color32::from_rgb(70, 75, 95)
-    } else {
-        Color32::from_rgb(tr, tg, tb)
-    };
-    child.add_space(4.0);
-    child.colored_label(
-        attn_color,
-        RichText::new(format!(" {} ", s.attention.label()))
-            .strong()
-            .small(),
-    );
-    child.add_space(6.0);
-    let title_color = if muted {
-        Color32::from_rgb(100, 105, 125)
-    } else {
-        Color32::from_rgb(192, 202, 245)
-    };
-    child.vertical(|ui| {
-        ui.label(RichText::new(&title).color(title_color));
-        ui.label(
-            RichText::new(format!("{}  ·  {}", s.id, cwd))
-                .small()
-                .color(Color32::from_rgb(86, 95, 137)),
-        );
-    });
-    ui.advance_cursor_after_rect(rect);
-    ui.add_space(4.0);
-
-    let mut action = RowAction::None;
-    if resp.clicked() {
-        action = RowAction::Focus;
-    }
-    resp.context_menu(|ui| {
-        ui.label(RichText::new("Priority").small().strong());
-        if ui.button("★ Important").clicked() {
-            action = RowAction::SetPriority(Priority::Important);
-            ui.close_menu();
-        }
-        if ui.button("Normal").clicked() {
-            action = RowAction::SetPriority(Priority::Normal);
-            ui.close_menu();
-        }
-        if ui.button("Muted").clicked() {
-            action = RowAction::SetPriority(Priority::Muted);
-            ui.close_menu();
-        }
-        ui.separator();
-        ui.label(RichText::new("Assign to").small().strong());
-        if groups.is_empty() {
-            ui.label(
-                RichText::new("(create a group above)")
-                    .small()
-                    .color(Color32::from_rgb(86, 95, 137)),
-            );
-        }
-        for g in groups {
-            if ui.button(&g.title).clicked() {
-                action = RowAction::Assign(g.id.clone());
-                ui.close_menu();
-            }
-        }
-        ui.separator();
-        if ui.button("Unassign").clicked() {
-            action = RowAction::Unassign;
-            ui.close_menu();
-        }
-    });
-    action
 }

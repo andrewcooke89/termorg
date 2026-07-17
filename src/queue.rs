@@ -11,10 +11,7 @@ use crate::provider::ProviderSession;
 use crate::store::{Priority, UserState};
 
 /// Build the ordered action queue for live sessions.
-pub fn build_action_queue(
-    sessions: &[ProviderSession],
-    state: &UserState,
-) -> Vec<ProviderSession> {
+pub fn build_action_queue(sessions: &[ProviderSession], state: &UserState) -> Vec<ProviderSession> {
     let mut q: Vec<ProviderSession> = sessions
         .iter()
         .filter(|s| include_in_queue(s, state))
@@ -45,10 +42,7 @@ fn include_in_queue(s: &ProviderSession, state: &UserState) -> bool {
     // Important + actively not-idle stays visible in the queue (D22).
     // Normal + working does NOT stay in the queue.
     if p == Priority::Important {
-        return matches!(
-            s.attention,
-            Attention::Working | Attention::Unknown
-        );
+        return matches!(s.attention, Attention::Working | Attention::Unknown);
     }
     false
 }
@@ -148,7 +142,7 @@ mod tests {
         assert!(!ids.contains(&"i")); // important idle out
         assert!(!ids.contains(&"m")); // muted out
         assert!(!ids.contains(&"x")); // normal working out
-        // order: important (w) before normal (n)
+                                      // order: important (w) before normal (n)
         assert!(ids.iter().position(|x| *x == "w") < ids.iter().position(|x| *x == "n"));
     }
 

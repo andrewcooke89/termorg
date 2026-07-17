@@ -278,8 +278,8 @@ pub fn ingest_hook_json(raw: &str) -> Result<Option<AgentSignal>> {
         message: format!("hook JSON: {e}"),
     })?;
 
-    let event_raw = json_str(&v, &["hook_event_name", "hookEventName", "event"])
-        .unwrap_or_default();
+    let event_raw =
+        json_str(&v, &["hook_event_name", "hookEventName", "event"]).unwrap_or_default();
     let event = normalize_event_name(&event_raw);
 
     // SessionStart: no attention change (avoid clobbering on resume).
@@ -287,15 +287,12 @@ pub fn ingest_hook_json(raw: &str) -> Result<Option<AgentSignal>> {
         return Ok(None);
     }
 
-    let notif_type =
-        json_str(&v, &["notification_type", "notificationType"]).unwrap_or_default();
+    let notif_type = json_str(&v, &["notification_type", "notificationType"]).unwrap_or_default();
 
     let state = match event.as_str() {
         "Notification" | "PermissionRequest" => SignalState::NeedsYou,
         "Stop" | "StopFailure" => SignalState::NeedsYou,
-        "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "SubagentStart" => {
-            SignalState::Working
-        }
+        "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "SubagentStart" => SignalState::Working,
         "SessionEnd" => SignalState::Idle,
         // Unknown: still treat idle/permission-ish messages as needs_you if present
         _ if !notif_type.is_empty()
@@ -329,8 +326,11 @@ pub fn ingest_hook_json(raw: &str) -> Result<Option<AgentSignal>> {
         &v,
         &["session_id", "sessionId", "thread_id", "threadId", "id"],
     );
-    let cwd = json_str(&v, &["cwd", "workingDirectory", "workspaceRoot", "workspace_root"])
-        .or_else(|| std::env::var("PWD").ok());
+    let cwd = json_str(
+        &v,
+        &["cwd", "workingDirectory", "workspaceRoot", "workspace_root"],
+    )
+    .or_else(|| std::env::var("PWD").ok());
 
     let kitty_pid = std::env::var("KITTY_PID").ok().filter(|s| !s.is_empty());
     let kitty_window_id = std::env::var("KITTY_WINDOW_ID")
@@ -395,10 +395,7 @@ fn normalize_event_name(raw: &str) -> String {
         }
     }
     // snake_case / kebab → PascalCase chunks
-    let parts: Vec<&str> = s
-        .split(|c: char| c == '_' || c == '-' || c == ' ')
-        .filter(|p| !p.is_empty())
-        .collect();
+    let parts: Vec<&str> = s.split(['_', '-', ' ']).filter(|p| !p.is_empty()).collect();
     if parts.len() > 1 {
         return parts
             .iter()
@@ -482,10 +479,7 @@ mod tests {
 
     fn with_temp_config<F: FnOnce()>(f: F) {
         let _g = LOCK.lock().unwrap();
-        let dir = std::env::temp_dir().join(format!(
-            "termorg-sig-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("termorg-sig-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         std::env::set_var("TERMORG_CONFIG_DIR", &dir);
@@ -523,15 +517,11 @@ mod tests {
         with_temp_config(|| {
             std::env::set_var("KITTY_PID", "1");
             std::env::set_var("KITTY_WINDOW_ID", "2");
-            ingest_hook_json(
-                r#"{"hook_event_name":"Stop","session_id":"s","cwd":"/x"}"#,
-            )
-            .unwrap();
-            let sig = ingest_hook_json(
-                r#"{"hook_event_name":"PreToolUse","session_id":"s","cwd":"/x"}"#,
-            )
-            .unwrap()
-            .expect("recorded");
+            ingest_hook_json(r#"{"hook_event_name":"Stop","session_id":"s","cwd":"/x"}"#).unwrap();
+            let sig =
+                ingest_hook_json(r#"{"hook_event_name":"PreToolUse","session_id":"s","cwd":"/x"}"#)
+                    .unwrap()
+                    .expect("recorded");
             assert_eq!(sig.state, SignalState::Working);
             let found = lookup(MatchHint {
                 cwd: Some("/x"),
@@ -595,11 +585,10 @@ mod tests {
             .unwrap()
             .expect("recorded");
             assert_eq!(sig.state, SignalState::NeedsYou);
-            let w = ingest_hook_json(
-                r#"{"hookEventName":"pre_tool_use","sessionId":"g1","cwd":"/g"}"#,
-            )
-            .unwrap()
-            .expect("recorded");
+            let w =
+                ingest_hook_json(r#"{"hookEventName":"pre_tool_use","sessionId":"g1","cwd":"/g"}"#)
+                    .unwrap()
+                    .expect("recorded");
             assert_eq!(w.state, SignalState::Working);
             assert!(ingest_hook_json(
                 r#"{"hookEventName":"session_start","sessionId":"g1","cwd":"/g"}"#

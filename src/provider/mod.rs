@@ -129,20 +129,6 @@ pub struct LaunchResult {
     pub kind: LaunchKind,
 }
 
-#[cfg(test)]
-mod launch_tests {
-    use super::*;
-
-    #[test]
-    fn launch_kind_parse() {
-        assert_eq!(LaunchKind::parse("claude"), Some(LaunchKind::Claude));
-        assert_eq!(LaunchKind::parse("SHELL"), Some(LaunchKind::Shell));
-        assert!(LaunchKind::parse("nope").is_none());
-        assert!(LaunchKind::Claude.command_argv().contains(&"claude".into()));
-        assert!(LaunchKind::Shell.command_argv().is_empty());
-    }
-}
-
 /// Abstract access to a terminal host.
 pub trait TerminalProvider: Send + Sync {
     fn provider_id(&self) -> &str;
@@ -155,10 +141,21 @@ pub trait TerminalProvider: Send + Sync {
     /// Open a new tab/window (FS13). Default: unsupported.
     fn launch(&self, _req: &LaunchRequest) -> Result<LaunchResult> {
         Err(crate::error::TermorgError::ProviderCommand {
-            message: format!(
-                "launch not supported by provider `{}`",
-                self.provider_id()
-            ),
+            message: format!("launch not supported by provider `{}`", self.provider_id()),
         })
+    }
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+
+    #[test]
+    fn launch_kind_parse() {
+        assert_eq!(LaunchKind::parse("claude"), Some(LaunchKind::Claude));
+        assert_eq!(LaunchKind::parse("SHELL"), Some(LaunchKind::Shell));
+        assert!(LaunchKind::parse("nope").is_none());
+        assert!(LaunchKind::Claude.command_argv().contains(&"claude".into()));
+        assert!(LaunchKind::Shell.command_argv().is_empty());
     }
 }

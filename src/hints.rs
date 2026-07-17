@@ -6,7 +6,7 @@
 
 use crate::path_group::path_group_for_cwd;
 use crate::provider::ProviderSession;
-use crate::store::{ManualGroup, UserState};
+use crate::store::UserState;
 
 /// One actionable suggestion for a live session.
 #[derive(Debug, Clone)]

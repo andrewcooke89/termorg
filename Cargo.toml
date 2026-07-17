@@ -2,8 +2,16 @@
 name = "termorg"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.75"
 description = "Terminal Organiser — control plane over terminal sessions"
 license = "MIT"
+readme = "README.md"
+keywords = ["terminal", "kitty", "tui", "productivity", "agents"]
+categories = ["command-line-utilities"]
+
+[lib]
+name = "termorg"
+path = "src/lib.rs"
 
 [[bin]]
 name = "termorg"

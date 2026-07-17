@@ -400,11 +400,7 @@ fn tree_has_tool_work(pids: &[i32]) -> bool {
     false
 }
 
-fn tree_has_tool_work_at(
-    pid: i32,
-    depth: u8,
-    seen: &mut std::collections::HashSet<i32>,
-) -> bool {
+fn tree_has_tool_work_at(pid: i32, depth: u8, seen: &mut std::collections::HashSet<i32>) -> bool {
     if depth > 12 || pid <= 0 || !seen.insert(pid) {
         return false;
     }
@@ -492,16 +488,7 @@ fn is_shellish(comm: &str) -> bool {
 fn is_agent_runtime(comm: &str) -> bool {
     matches!(
         comm.trim(),
-        "claude"
-            | "node"
-            | "nodejs"
-            | "codex"
-            | "kilo"
-            | "grok"
-            | "npm"
-            | "npx"
-            | "bun"
-            | "deno"
+        "claude" | "node" | "nodejs" | "codex" | "kilo" | "grok" | "npm" | "npx" | "bun" | "deno"
     )
 }
 

@@ -22,7 +22,8 @@ pub fn session_matches(
     }
     let hay = build_haystack(session, state, group_title);
     // All tokens must appear (order-independent).
-    q.split_whitespace().all(|tok| hay.contains(&tok.to_lowercase()))
+    q.split_whitespace()
+        .all(|tok| hay.contains(&tok.to_lowercase()))
 }
 
 fn build_haystack(
@@ -134,7 +135,12 @@ mod tests {
 
     #[test]
     fn multi_token_and() {
-        let s = sess("x", "Sleep then say hi", Some("/tmp/proj"), AgentClass::Claude);
+        let s = sess(
+            "x",
+            "Sleep then say hi",
+            Some("/tmp/proj"),
+            AgentClass::Claude,
+        );
         let st = UserState::default();
         assert!(session_matches(&s, &st, "sleep claude", None));
         assert!(!session_matches(&s, &st, "sleep codex", None));
@@ -151,9 +157,7 @@ mod tests {
         });
         st.session_prefs.push(SessionPref {
             provider: "kitty".into(),
-            match_rule: SessionMatch::ProviderId {
-                id: "t1".into(),
-            },
+            match_rule: SessionMatch::ProviderId { id: "t1".into() },
             manual_group_id: Some("g1".into()),
             priority: Priority::Normal,
             cwd: None,

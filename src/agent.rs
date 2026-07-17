@@ -53,7 +53,6 @@ impl AgentClass {
             Self::Unknown => (65, 72, 104),  // dim
         }
     }
-
 }
 
 impl std::fmt::Display for AgentClass {
@@ -241,12 +240,24 @@ mod tests {
 
     #[test]
     fn classifies_agent_names() {
-        assert_eq!(classify_text("claude --dangerously-skip-permissions"), Some(AgentClass::Claude));
+        assert_eq!(
+            classify_text("claude --dangerously-skip-permissions"),
+            Some(AgentClass::Claude)
+        );
         assert_eq!(classify_text("/bin/codex"), Some(AgentClass::Codex));
-        assert_eq!(classify_text("codex-code-mode-host"), Some(AgentClass::Codex));
+        assert_eq!(
+            classify_text("codex-code-mode-host"),
+            Some(AgentClass::Codex)
+        );
         assert_eq!(classify_text("grok"), Some(AgentClass::Grok));
-        assert_eq!(classify_text("/home/u/.local/bin/kilo"), Some(AgentClass::Kilo));
-        assert_eq!(classify_text("claude-desktop --type=gpu"), Some(AgentClass::Other));
+        assert_eq!(
+            classify_text("/home/u/.local/bin/kilo"),
+            Some(AgentClass::Kilo)
+        );
+        assert_eq!(
+            classify_text("claude-desktop --type=gpu"),
+            Some(AgentClass::Other)
+        );
     }
 
     #[test]

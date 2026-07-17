@@ -72,7 +72,9 @@ impl Priority {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionMatch {
-    ProviderId { id: String },
+    ProviderId {
+        id: String,
+    },
     /// Legacy: old builds stored standalone fingerprints that applied to every
     /// matching tab. Kept for deserialize; ignored for live membership.
     #[serde(other)]
@@ -98,7 +100,7 @@ pub struct SessionPref {
 }
 
 impl SessionPref {
-    fn is_meaningful(&self) -> bool {
+    pub(crate) fn is_meaningful(&self) -> bool {
         self.manual_group_id.is_some() || self.priority != Priority::Normal
     }
 }
@@ -245,7 +247,8 @@ impl UserState {
 
     /// Live membership: **exact session id only** (one tab = one assignment).
     pub fn manual_group_for(&self, session: &ProviderSession) -> Option<String> {
-        self.pref_for(session).and_then(|p| p.manual_group_id.clone())
+        self.pref_for(session)
+            .and_then(|p| p.manual_group_id.clone())
     }
 
     /// User priority for a live session (default normal).
@@ -332,7 +335,8 @@ impl UserState {
     /// Drop hints pointing at deleted groups.
     pub fn prune_stale_hints(&mut self) {
         let gids: HashSet<&str> = self.manual_groups.iter().map(|g| g.id.as_str()).collect();
-        self.path_hints.retain(|h| gids.contains(h.group_id.as_str()));
+        self.path_hints
+            .retain(|h| gids.contains(h.group_id.as_str()));
     }
 
     pub fn unassign(&mut self, session: &ProviderSession) {
@@ -498,9 +502,7 @@ impl UserState {
             };
 
             if let Some(s) = chosen {
-                pref.match_rule = SessionMatch::ProviderId {
-                    id: s.id.clone(),
-                };
+                pref.match_rule = SessionMatch::ProviderId { id: s.id.clone() };
                 pref.title = Some(s.title.clone());
                 pref.cwd = s.cwd.clone();
                 pref.updated_at = now;
@@ -698,7 +700,10 @@ mod tests {
         let b = sess("w1:t2", "/tmp/repo", "bash"); // new tab, same cwd
         state.assign(&a, "Trading").unwrap();
 
-        assert_eq!(state.manual_group_for(&a).as_deref(), Some(state.manual_groups[0].id.as_str()));
+        assert_eq!(
+            state.manual_group_for(&a).as_deref(),
+            Some(state.manual_groups[0].id.as_str())
+        );
         // Sibling tab must NOT inherit.
         assert!(state.manual_group_for(&b).is_none());
 
@@ -729,11 +734,8 @@ mod tests {
 
         // Old id gone; one live tab at that cwd → rebind.
         let neu = sess("new:w1:t9", "/tmp/only", "shell-a");
-        assert!(state.rebind_stale_session_ids(&[neu.clone()]));
-        assert_eq!(
-            state.manual_group_for(&neu).as_deref(),
-            Some(g.id.as_str())
-        );
+        assert!(state.rebind_stale_session_ids(std::slice::from_ref(&neu)));
+        assert_eq!(state.manual_group_for(&neu).as_deref(), Some(g.id.as_str()));
 
         // Two live tabs at same cwd → ambiguous, no rebind for a fresh stale pref.
         let mut state2 = UserState::default();

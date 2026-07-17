@@ -76,16 +76,10 @@ pub fn sessions_by_group(sessions: Vec<ProviderSession>) -> Vec<(PathGroup, Vec<
 
     let mut out: Vec<(PathGroup, Vec<ProviderSession>)> = map.into_values().collect();
     // Sort groups: Unknown last, else by title then id.
-    out.sort_by(|a, b| {
-        match (a.0.unknown, b.0.unknown) {
-            (true, false) => std::cmp::Ordering::Greater,
-            (false, true) => std::cmp::Ordering::Less,
-            _ => a
-                .0
-                .title
-                .cmp(&b.0.title)
-                .then_with(|| a.0.id.cmp(&b.0.id)),
-        }
+    out.sort_by(|a, b| match (a.0.unknown, b.0.unknown) {
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => a.0.title.cmp(&b.0.title).then_with(|| a.0.id.cmp(&b.0.id)),
     });
     for (_g, sessions) in &mut out {
         sessions.sort_by(|a, b| a.id.cmp(&b.id));
