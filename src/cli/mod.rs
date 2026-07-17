@@ -90,6 +90,9 @@ pub fn run() {
     }
 }
 
-fn build_provider(kind: ProviderKind, kitty_to: Option<&str>) -> crate::error::Result<MultiProvider> {
+fn build_provider(
+    kind: ProviderKind,
+    kitty_to: Option<&str>,
+) -> crate::error::Result<MultiProvider> {
     MultiProvider::from_kind(kind, kitty_to)
 }

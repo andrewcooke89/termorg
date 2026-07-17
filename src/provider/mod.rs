@@ -184,10 +184,7 @@ pub trait TerminalProvider: Send + Sync {
     /// Open a new tab/window. Default: unsupported.
     fn launch(&self, _req: &LaunchRequest) -> Result<LaunchResult> {
         Err(crate::error::TermorgError::ProviderCommand {
-            message: format!(
-                "launch not supported by provider `{}`",
-                self.provider_id()
-            ),
+            message: format!("launch not supported by provider `{}`", self.provider_id()),
         })
     }
 

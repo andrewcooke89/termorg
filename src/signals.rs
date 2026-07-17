@@ -205,11 +205,8 @@ fn match_rank(sig: &AgentSignal, hint: MatchHint<'_>) -> Option<u8> {
         }
     }
     // 1 = signal has tmux pane identity, hint only has cwd (weaker)
-    if let (Some(_), Some(sc), Some(hc)) = (
-        sig.tmux_pane.as_deref(),
-        sig.cwd.as_deref(),
-        hint.cwd,
-    ) {
+    if let (Some(_), Some(sc), Some(hc)) = (sig.tmux_pane.as_deref(), sig.cwd.as_deref(), hint.cwd)
+    {
         if paths_equal(sc, hc) {
             return Some(1);
         }

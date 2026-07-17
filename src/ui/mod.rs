@@ -342,9 +342,7 @@ impl PanelState {
                                             && s.focus_window_id == result.window_id
                                     })
                                 })
-                                .or_else(|| {
-                                    sessions.iter().find(|s| s.cwd == result.cwd)
-                                });
+                                .or_else(|| sessions.iter().find(|s| s.cwd == result.cwd));
                             if let Some(session) = found {
                                 match UserState::load() {
                                     Ok(mut st) => {

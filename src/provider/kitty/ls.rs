@@ -74,7 +74,11 @@ pub(super) fn parse_kitty_ls(
             let agent = agent::classify_session(&pids, &cmdlines, &title);
             let at_prompt = tab_at_prompt(&tab);
             let id = format!("{instance}:w{}:t{}", osw.id, tab.id);
-            let focus_key = Some(format!("{instance}:t{}:w{}", tab.id, focus_window_id.unwrap_or(0)));
+            let focus_key = Some(format!(
+                "{instance}:t{}:w{}",
+                tab.id,
+                focus_window_id.unwrap_or(0)
+            ));
             let hint = crate::signals::MatchHint {
                 cwd: cwd.as_deref(),
                 kitty_pid: Some(instance),

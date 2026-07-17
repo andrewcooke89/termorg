@@ -2,9 +2,7 @@
 
 use super::kitty::KittyProvider;
 use super::tmux::TmuxProvider;
-use super::{
-    Capabilities, LaunchRequest, LaunchResult, ProviderSession, TerminalProvider,
-};
+use super::{Capabilities, LaunchRequest, LaunchResult, ProviderSession, TerminalProvider};
 use crate::error::{Result, TermorgError};
 
 /// Which backend(s) to use.

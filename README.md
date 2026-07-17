@@ -50,7 +50,7 @@ drive agent classification; `TMUX_PANE` is recorded by hooks for precise matchin
 ## Install
 
 ```bash
-git clone <repo-url> termorg
+git clone https://github.com/andrewcooke89/termorg.git
 cd termorg
 cargo install --path .
 # or: cargo build --release && cp target/release/termorg ~/.local/bin/

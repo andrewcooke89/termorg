@@ -6,9 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use super::{
-    Capabilities, LaunchRequest, LaunchResult, ProviderSession, TerminalProvider,
-};
+use super::{Capabilities, LaunchRequest, LaunchResult, ProviderSession, TerminalProvider};
 use crate::agent;
 use crate::attention;
 use crate::error::{Result, TermorgError};
@@ -138,14 +136,12 @@ impl TmuxProvider {
             };
             let agent = agent::classify_session(&pids, &cmdlines, window_name);
             // at_prompt: shell-like foreground with idle attention path
-            let at_prompt = if matches!(
-                agent,
-                agent::AgentClass::Shell | agent::AgentClass::Unknown
-            ) {
-                Some(true)
-            } else {
-                Some(false)
-            };
+            let at_prompt =
+                if matches!(agent, agent::AgentClass::Shell | agent::AgentClass::Unknown) {
+                    Some(true)
+                } else {
+                    Some(false)
+                };
 
             let win_num = window_id
                 .strip_prefix('@')
@@ -156,10 +152,7 @@ impl TmuxProvider {
                 Some(pid) => format!("{focus_key}|{pid}"),
                 None => focus_key,
             };
-            let pane_for_hint = full_key
-                .split('|')
-                .nth(1)
-                .map(|s| s.to_string());
+            let pane_for_hint = full_key.split('|').nth(1).map(|s| s.to_string());
             let cwd_owned = if cwd.is_empty() {
                 None
             } else {
@@ -171,8 +164,7 @@ impl TmuxProvider {
                 kitty_window_id: None,
                 tmux_pane: pane_for_hint.as_deref(),
             };
-            let attention =
-                attention::classify(&id, agent, at_prompt, window_name, &pids, hint);
+            let attention = attention::classify(&id, agent, at_prompt, window_name, &pids, hint);
 
             sessions.push(ProviderSession {
                 provider: PROVIDER_ID.into(),
@@ -289,7 +281,8 @@ impl TerminalProvider for TmuxProvider {
         let target = Self::target_window(session)?;
         // Select the window; switch client so attached users see it.
         self.run(&["select-window", "-t", &target])?;
-        if let Some(sess) = Self::session_name_from_key(session.focus_key.as_deref().unwrap_or("")) {
+        if let Some(sess) = Self::session_name_from_key(session.focus_key.as_deref().unwrap_or(""))
+        {
             let _ = self.run(&["switch-client", "-t", sess]);
         }
         Ok(())
@@ -536,8 +529,7 @@ other\t@20\t1\tbash\t1\t/tmp\t99\tbash\t0\t%1
 
     #[test]
     fn parse_focus_key_handles_colon_in_session_name() {
-        let (sess, win, pane) =
-            TmuxProvider::parse_focus_key("proj:main:@7|%3").expect("parse");
+        let (sess, win, pane) = TmuxProvider::parse_focus_key("proj:main:@7|%3").expect("parse");
         assert_eq!(sess, "proj:main");
         assert_eq!(win, "@7");
         assert_eq!(pane, Some("%3"));
@@ -558,10 +550,7 @@ other\t@20\t1\tbash\t1\t/tmp\t99\tbash\t0\t%1
             "sock",
         );
         assert_eq!(sessions.len(), 1);
-        assert_eq!(
-            sessions[0].focus_key.as_deref(),
-            Some("proj:main:@7|%3")
-        );
+        assert_eq!(sessions[0].focus_key.as_deref(), Some("proj:main:@7|%3"));
         let name = sessions[0]
             .focus_key
             .as_ref()
@@ -584,10 +573,7 @@ other\t@20\t1\tbash\t1\t/tmp\t99\tbash\t0\t%1
             "default",
         );
         let sess = s.remove(0);
-        assert_eq!(
-            TmuxProvider::target_window(&sess).unwrap(),
-            "work:@12"
-        );
+        assert_eq!(TmuxProvider::target_window(&sess).unwrap(), "work:@12");
     }
 
     /// Live control plane on an isolated tmux socket (does not touch user server).
@@ -636,7 +622,11 @@ other\t@20\t1\tbash\t1\t/tmp\t99\tbash\t0\t%1
         assert_eq!(listed[0].provider, "tmux");
         assert!(listed[0].id.contains("@"), "id={}", listed[0].id);
         assert!(
-            listed[0].focus_key.as_deref().unwrap_or("").contains("smoke:"),
+            listed[0]
+                .focus_key
+                .as_deref()
+                .unwrap_or("")
+                .contains("smoke:"),
             "focus_key={:?}",
             listed[0].focus_key
         );
@@ -662,10 +652,7 @@ other\t@20\t1\tbash\t1\t/tmp\t99\tbash\t0\t%1
         provider
             .set_tab_color(
                 &after_title[0],
-                &[
-                    "active_bg=NONE".into(),
-                    "active_fg=NONE".into(),
-                ],
+                &["active_bg=NONE".into(), "active_fg=NONE".into()],
             )
             .expect("color reset");
 
@@ -693,8 +680,7 @@ other\t@20\t1\tbash\t1\t/tmp\t99\tbash\t0\t%1
             .unwrap_or_else(|| panic!("launched {nid} not found exactly in {after:?}"));
         assert_eq!(found.id.rsplit(':').next(), Some(nid));
         assert_eq!(
-            found.focus_window_id,
-            launched.window_id,
+            found.focus_window_id, launched.window_id,
             "focus_window_id must equal launch window_id"
         );
         // Ensure @1-style prefix confusion cannot pass: if nid is @N, no other id tail may match.

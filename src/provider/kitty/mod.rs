@@ -280,7 +280,6 @@ impl TerminalProvider for KittyProvider {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
