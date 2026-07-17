@@ -34,6 +34,14 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+fn accent_from_rgb(rgb: (u8, u8, u8), muted: bool) -> Color32 {
+    if muted {
+        theme::FG_FAINT
+    } else {
+        theme::readable_accent(Color32::from_rgb(rgb.0, rgb.1, rgb.2))
+    }
+}
+
 /// Attention-tinted left bar + pills for provider / agent / attention.
 pub(super) fn session_row(
     ui: &mut egui::Ui,
@@ -42,7 +50,6 @@ pub(super) fn session_row(
     in_manual: bool,
     priority: Priority,
     groups: &[ManualGroup],
-    pulse: f32,
 ) -> RowAction {
     let title = truncate(&s.title, 42);
     let cwd = s
@@ -55,14 +62,20 @@ pub(super) fn session_row(
     let muted = priority == Priority::Muted;
     let needs = s.attention == crate::attention::Attention::NeedsYou && !muted;
 
-    let row_h = 46.0;
+    let row_h = 48.0;
     let (rect, resp) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), Sense::click());
 
-    let mut fill = if selected {
+    let fill = if selected && needs {
+        theme::BG_NEEDS_SEL
+    } else if selected {
         theme::BG_ROW_SELECTED
     } else if muted {
         theme::BG_MUTED
+    } else if needs && resp.hovered() {
+        theme::BG_NEEDS_HOVER
+    } else if needs {
+        theme::BG_NEEDS
     } else if priority == Priority::Important {
         theme::BG_IMPORTANT
     } else if s.is_focused {
@@ -70,118 +83,68 @@ pub(super) fn session_row(
     } else if resp.hovered() {
         theme::BG_ROW_HOVER
     } else if in_manual {
-        Color32::from_rgb(32, 34, 46)
+        Color32::from_rgb(36, 38, 54)
     } else {
         theme::BG_ROW
     };
 
-    // Subtle pulse when needs you
-    if needs {
-        let boost = (pulse * 14.0) as u8;
-        fill = Color32::from_rgb(
-            fill.r().saturating_add(boost / 2),
-            fill.g().saturating_add(boost / 4),
-            fill.b().saturating_add(boost / 3),
-        );
-    }
-
     ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
 
-    // Left attention / agent accent bar
-    let (ar, ag, ab) = s.agent.rgb();
-    let agent_color = if muted {
-        theme::FG_DIM
-    } else {
-        Color32::from_rgb(ar, ag, ab)
-    };
-    let (tr, tg, tb) = s.attention.rgb();
-    let attn_color = if muted {
-        theme::FG_DIM
-    } else {
-        Color32::from_rgb(tr, tg, tb)
-    };
+    let agent_color = accent_from_rgb(s.agent.rgb(), muted);
+    let attn_color = accent_from_rgb(s.attention.rgb(), muted);
     let bar_color = if needs { attn_color } else { agent_color };
-    let bar = egui::Rect::from_min_size(rect.min, Vec2::new(3.5, rect.height()));
+    let bar = egui::Rect::from_min_size(rect.min, Vec2::new(4.0, rect.height()));
     ui.painter()
         .rect_filled(bar, CornerRadius::same(2), bar_color);
 
-    // Content
     let mut child = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(rect.shrink2(Vec2::new(12.0, 5.0)))
+            .max_rect(rect.shrink2(Vec2::new(12.0, 6.0)))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
 
-    // Focus dot
     let focus_col = if s.is_focused {
         theme::GREEN
     } else {
-        theme::FG_DIM
+        theme::FG_FAINT
     };
     child.label(
         RichText::new(if s.is_focused { "●" } else { "○" })
             .color(focus_col)
-            .size(11.0),
+            .size(12.0),
     );
     child.add_space(6.0);
 
     if priority == Priority::Important {
-        child.label(RichText::new("★").color(theme::AMBER).strong());
+        child.label(RichText::new("★").color(theme::AMBER).strong().size(13.0));
         child.add_space(4.0);
     }
 
-    // Provider pill
-    let pcol = theme::provider_color(&s.provider);
-    let plabel = theme::provider_label(&s.provider);
-    let pbg = if muted {
-        theme::tinted_bg(theme::FG_DIM, 40)
+    let pcol = if muted {
+        theme::FG_FAINT
     } else {
-        theme::tinted_bg(pcol, 48)
+        theme::provider_color(&s.provider)
     };
-    theme::pill(
-        &mut child,
-        plabel,
-        if muted { theme::FG_MUTED } else { pcol },
-        pbg,
-    );
-    child.add_space(4.0);
+    theme::pill(&mut child, theme::provider_label(&s.provider), pcol);
+    child.add_space(5.0);
+    theme::pill(&mut child, s.agent.label(), agent_color);
+    child.add_space(5.0);
+    theme::pill(&mut child, s.attention.label(), attn_color);
+    child.add_space(10.0);
 
-    // Agent pill
-    theme::pill(
-        &mut child,
-        s.agent.label(),
-        if muted { theme::FG_MUTED } else { agent_color },
-        if muted {
-            theme::tinted_bg(theme::FG_DIM, 36)
-        } else {
-            theme::tinted_bg(agent_color, 42)
-        },
-    );
-    child.add_space(4.0);
-
-    // Attention pill
-    theme::pill(
-        &mut child,
-        s.attention.label(),
-        if muted { theme::FG_MUTED } else { attn_color },
-        if muted {
-            theme::tinted_bg(theme::FG_DIM, 36)
-        } else {
-            theme::tinted_bg(attn_color, 48)
-        },
-    );
-    child.add_space(8.0);
-
-    // Title + meta
-    let title_color = if muted { theme::FG_MUTED } else { theme::FG };
+    let title_color = if muted {
+        theme::FG_FAINT
+    } else {
+        theme::FG_TITLE
+    };
     child.vertical(|ui| {
-        ui.spacing_mut().item_spacing.y = 1.0;
-        ui.label(RichText::new(&title).color(title_color).size(13.0));
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.label(RichText::new(&title).color(title_color).size(14.0));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(RichText::new(&ref_id).small().color(pcol));
-            ui.label(RichText::new("·").small().color(theme::FG_DIM));
-            ui.label(RichText::new(&cwd).small().color(theme::FG_DIM));
+            ui.label(RichText::new(&ref_id).size(12.0).color(pcol));
+            ui.label(RichText::new("·").size(12.0).color(theme::FG_FAINT));
+            ui.label(RichText::new(&cwd).size(12.0).color(theme::FG_META));
         });
     });
 
@@ -203,9 +166,9 @@ pub(super) fn session_row(
     resp.context_menu(|ui| {
         ui.label(
             RichText::new("Priority")
-                .small()
+                .size(12.0)
                 .strong()
-                .color(theme::FG_DIM),
+                .color(theme::FG_META),
         );
         if ui.button("★ Important").clicked() {
             action = RowAction::SetPriority(Priority::Important);
@@ -222,15 +185,15 @@ pub(super) fn session_row(
         ui.separator();
         ui.label(
             RichText::new("Assign to")
-                .small()
+                .size(12.0)
                 .strong()
-                .color(theme::FG_DIM),
+                .color(theme::FG_META),
         );
         if groups.is_empty() {
             ui.label(
                 RichText::new("(create a group in Tools)")
-                    .small()
-                    .color(theme::FG_DIM),
+                    .size(12.0)
+                    .color(theme::FG_META),
             );
         }
         for g in groups {
@@ -247,58 +210,49 @@ pub(super) fn session_row(
         ui.separator();
         ui.label(
             RichText::new(format!("id  {}", s.id))
-                .small()
-                .color(theme::FG_DIM),
+                .size(12.0)
+                .color(theme::FG_META),
         );
     });
     action
 }
 
-/// Hero queue row — larger, attention-forward.
+/// Queue row — static needs-you emphasis, no flash.
 pub(super) fn queue_row(
     ui: &mut egui::Ui,
     index: usize,
     s: &ProviderSession,
     selected: bool,
     priority: Priority,
-    pulse: f32,
 ) -> bool {
     let title = truncate(&s.title, 36);
     let ref_id = short_ref(s);
     let needs = s.attention == crate::attention::Attention::NeedsYou;
 
     let (rect, resp) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.0), Sense::click());
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 40.0), Sense::click());
 
-    let mut fill = if selected {
-        theme::BG_QUEUE_SEL
+    let fill = if selected {
+        theme::BG_NEEDS_SEL
     } else if resp.hovered() {
-        theme::BG_QUEUE_HOVER
+        theme::BG_NEEDS_HOVER
+    } else if needs {
+        theme::BG_NEEDS
     } else {
         theme::BG_QUEUE
     };
-    if needs {
-        let boost = (pulse * 18.0) as u8;
-        fill = Color32::from_rgb(
-            fill.r().saturating_add(boost),
-            fill.g().saturating_add(boost / 3),
-            fill.b().saturating_add(boost / 2),
-        );
-    }
-    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+    ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
 
-    // left bar
-    let (tr, tg, tb) = s.attention.rgb();
-    let attn = Color32::from_rgb(tr, tg, tb);
+    let attn = accent_from_rgb(s.attention.rgb(), false);
     ui.painter().rect_filled(
-        egui::Rect::from_min_size(rect.min, Vec2::new(3.5, rect.height())),
+        egui::Rect::from_min_size(rect.min, Vec2::new(4.0, rect.height())),
         CornerRadius::same(2),
         attn,
     );
 
     let mut child = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(rect.shrink2(Vec2::new(10.0, 5.0)))
+            .max_rect(rect.shrink2(Vec2::new(12.0, 6.0)))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
 
@@ -311,40 +265,26 @@ pub(super) fn queue_row(
         RichText::new(format!("{star}{}", index + 1))
             .strong()
             .color(theme::AMBER)
-            .size(12.0),
+            .size(13.0),
     );
     child.add_space(8.0);
 
     let pcol = theme::provider_color(&s.provider);
-    theme::pill(
-        &mut child,
-        theme::provider_label(&s.provider),
-        pcol,
-        theme::tinted_bg(pcol, 50),
-    );
-    child.add_space(4.0);
-
-    let (ar, ag, ab) = s.agent.rgb();
-    let agent_c = Color32::from_rgb(ar, ag, ab);
+    theme::pill(&mut child, theme::provider_label(&s.provider), pcol);
+    child.add_space(5.0);
     theme::pill(
         &mut child,
         s.agent.label(),
-        agent_c,
-        theme::tinted_bg(agent_c, 45),
+        accent_from_rgb(s.agent.rgb(), false),
     );
-    child.add_space(4.0);
-    theme::pill(
-        &mut child,
-        s.attention.label(),
-        attn,
-        theme::tinted_bg(attn, 55),
-    );
+    child.add_space(5.0);
+    theme::pill(&mut child, s.attention.label(), attn);
+    child.add_space(10.0);
+    child.label(RichText::new(&title).color(theme::FG_TITLE).size(14.0));
     child.add_space(8.0);
-    child.label(RichText::new(&title).color(theme::FG).size(13.0));
-    child.add_space(6.0);
-    child.label(RichText::new(&ref_id).small().color(pcol));
+    child.label(RichText::new(&ref_id).size(12.0).color(pcol));
 
     ui.advance_cursor_after_rect(rect);
-    ui.add_space(3.0);
+    ui.add_space(4.0);
     resp.clicked()
 }

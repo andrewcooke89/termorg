@@ -240,12 +240,6 @@ impl PanelState {
         s
     }
 
-    fn pulse(&self, ctx: &egui::Context) -> f32 {
-        // 0..1 gentle triangle for needs_you emphasis
-        let t = ctx.input(|i| i.time) as f32;
-        (t * std::f32::consts::TAU * 0.7).sin().abs()
-    }
-
     fn provider_counts(&self) -> (usize, usize, usize) {
         let mut kitty = 0usize;
         let mut tmux = 0usize;
@@ -829,9 +823,7 @@ impl eframe::App for PanelState {
             }
         }
 
-        // Smooth pulse for needs_you rows
-        ctx.request_repaint_after(Duration::from_millis(50));
-        let pulse = self.pulse(ctx);
+        ctx.request_repaint_after(Duration::from_millis(250));
         let (n_kitty, n_tmux, _) = self.provider_counts();
         let n_queue = self.action_queue.len();
         let n_manual = self.manual_groups.len();
@@ -1056,9 +1048,9 @@ impl eframe::App for PanelState {
                     ];
                     for (k, v) in keys {
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 3.0;
-                            th::pill(ui, k, th::BLUE, th::tinted_bg(th::BLUE, 36));
-                            ui.label(RichText::new(v).small().color(th::FG_DIM));
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            th::pill(ui, k, th::BLUE);
+                            ui.label(RichText::new(v).size(12.0).color(th::FG_META));
                         });
                     }
                 });
@@ -1180,7 +1172,7 @@ impl eframe::App for PanelState {
                     };
                     for (qi, s) in self.action_queue.iter().enumerate() {
                         let pri = pri_map.get(&s.id).copied().unwrap_or(Priority::Normal);
-                        if rows::queue_row(ui, qi, s, qsel == Some(qi), pri, pulse) {
+                        if rows::queue_row(ui, qi, s, qsel == Some(qi), pri) {
                             queue_click = Some(qi);
                         }
                     }
@@ -1241,6 +1233,13 @@ impl eframe::App for PanelState {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         for (si, sec) in self.sections.iter().enumerate() {
+                            let empty = match sec {
+                                DisplaySection::Manual { sessions, .. }
+                                | DisplaySection::Auto { sessions, .. } => sessions.is_empty(),
+                            };
+                            if empty {
+                                continue;
+                            }
                             ui.add_space(6.0);
                             match sec {
                                 DisplaySection::Manual { group, sessions } => {
@@ -1263,7 +1262,6 @@ impl eframe::App for PanelState {
                                             true,
                                             pri,
                                             &groups_for_menu,
-                                            pulse,
                                         );
                                         match action {
                                             RowAction::Focus => clicked = Some(s.clone()),
@@ -1309,7 +1307,6 @@ impl eframe::App for PanelState {
                                             false,
                                             pri,
                                             &groups_for_menu,
-                                            pulse,
                                         );
                                         match action {
                                             RowAction::Focus => clicked = Some(s.clone()),
