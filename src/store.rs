@@ -173,11 +173,15 @@ impl UserState {
         if state.schema_version == 0 {
             state.schema_version = SCHEMA;
         }
-        // Keep provider-id prefs that have a group and/or non-default priority.
-        state.session_prefs.retain(|p| {
+        state.retain_persisted_prefs();
+        Ok(state)
+    }
+
+    /// Drop prefs that should not survive disk reload / rebind cleanup.
+    pub(crate) fn retain_persisted_prefs(&mut self) {
+        self.session_prefs.retain(|p| {
             matches!(p.match_rule, SessionMatch::ProviderId { .. }) && p.is_meaningful()
         });
-        Ok(state)
     }
 
     pub fn save(&self) -> Result<()> {
