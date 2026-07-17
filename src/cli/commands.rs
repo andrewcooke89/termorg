@@ -355,7 +355,6 @@ pub(crate) fn print_sections(
     filter_q: Option<&str>,
 ) {
     let total = sessions.len();
-    let filtering = filter_q.is_some_and(|q| !q.trim().is_empty());
     let sections = build_display_sections(sessions, state);
     let mut n_manual = 0usize;
     let mut n_auto = 0usize;
