@@ -173,11 +173,14 @@ pub fn lookup(hint: MatchHint<'_>) -> Option<AgentSignal> {
 }
 
 fn match_rank(sig: &AgentSignal, hint: MatchHint<'_>) -> Option<u8> {
-    // 0 = exact tmux pane (best for multi-window same-cwd setups)
+    // 0 = exact tmux pane (best for multi-window same-cwd setups).
+    // If both sides carry a pane id and they disagree, do not fall through to
+    // cwd — otherwise two panes in the same project steal each other's signals.
     if let (Some(sp), Some(hp)) = (sig.tmux_pane.as_deref(), hint.tmux_pane) {
         if sp == hp {
             return Some(0);
         }
+        return None;
     }
     // 0 = exact kitty window in same instance
     if let (Some(sp), Some(hp), Some(sw), Some(hw)) = (
@@ -201,7 +204,7 @@ fn match_rank(sig: &AgentSignal, hint: MatchHint<'_>) -> Option<u8> {
             return Some(1);
         }
     }
-    // 1 = tmux pane missing but cwd match with a tmux-sourced signal
+    // 1 = signal has tmux pane identity, hint only has cwd (weaker)
     if let (Some(_), Some(sc), Some(hc)) = (
         sig.tmux_pane.as_deref(),
         sig.cwd.as_deref(),
@@ -627,6 +630,85 @@ mod tests {
             .expect("pane match");
             assert_eq!(found.state, SignalState::NeedsYou);
             std::env::remove_var("TMUX_PANE");
+        });
+    }
+
+    #[test]
+    fn wrong_tmux_pane_does_not_match_via_cwd() {
+        with_temp_config(|| {
+            record(AgentSignal {
+                state: SignalState::NeedsYou,
+                reason: Some("pane-a".into()),
+                source: None,
+                agent_session_id: Some("a".into()),
+                cwd: Some("/same/proj".into()),
+                kitty_pid: None,
+                kitty_window_id: None,
+                tmux_pane: Some("%10".into()),
+                updated_at: now_secs(),
+                ttl_secs: DEFAULT_TTL_SECS,
+            })
+            .unwrap();
+            // Hint for a different pane in the same cwd must not steal.
+            assert!(
+                lookup(MatchHint {
+                    cwd: Some("/same/proj"),
+                    kitty_pid: None,
+                    kitty_window_id: None,
+                    tmux_pane: Some("%99"),
+                })
+                .is_none(),
+                "wrong pane must not match via cwd"
+            );
+            // Correct pane still matches.
+            let hit = lookup(MatchHint {
+                cwd: Some("/same/proj"),
+                kitty_pid: None,
+                kitty_window_id: None,
+                tmux_pane: Some("%10"),
+            })
+            .expect("correct pane");
+            assert_eq!(hit.reason.as_deref(), Some("pane-a"));
+        });
+    }
+
+    #[test]
+    fn tmux_pane_rehook_upserts_same_slot() {
+        with_temp_config(|| {
+            record(AgentSignal {
+                state: SignalState::Working,
+                reason: Some("pre".into()),
+                source: None,
+                agent_session_id: None,
+                cwd: Some("/p".into()),
+                kitty_pid: None,
+                kitty_window_id: None,
+                tmux_pane: Some("%7".into()),
+                updated_at: now_secs(),
+                ttl_secs: DEFAULT_TTL_SECS,
+            })
+            .unwrap();
+            record(AgentSignal {
+                state: SignalState::NeedsYou,
+                reason: Some("stop".into()),
+                source: None,
+                agent_session_id: None,
+                cwd: Some("/p".into()),
+                kitty_pid: None,
+                kitty_window_id: None,
+                tmux_pane: Some("%7".into()),
+                updated_at: now_secs(),
+                ttl_secs: DEFAULT_TTL_SECS,
+            })
+            .unwrap();
+            let all = list_signals();
+            let pane7: Vec<_> = all
+                .iter()
+                .filter(|s| s.tmux_pane.as_deref() == Some("%7"))
+                .collect();
+            assert_eq!(pane7.len(), 1, "same pane must upsert one slot: {all:?}");
+            assert_eq!(pane7[0].state, SignalState::NeedsYou);
+            assert_eq!(pane7[0].reason.as_deref(), Some("stop"));
         });
     }
 

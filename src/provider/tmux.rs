@@ -196,11 +196,37 @@ impl TmuxProvider {
         "#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_path}\t#{pane_pid}\t#{pane_current_command}\t#{session_attached}\t#{pane_id}"
     }
 
+    /// Parse `focus_key` → `(session_name, window_target, pane_id?)`.
+    ///
+    /// Formats: `session:@N`, `session:@N|%pane`. Window id is always `@…`.
+    /// Session name may contain `:` — we split on the last `:` before `|`.
+    pub(crate) fn parse_focus_key(key: &str) -> Option<(&str, &str, Option<&str>)> {
+        let key = key.trim();
+        if key.is_empty() {
+            return None;
+        }
+        let (base, pane) = match key.split_once('|') {
+            Some((b, p)) if !p.is_empty() => (b, Some(p)),
+            _ => (key.split('|').next().unwrap_or(key), None),
+        };
+        let (sess, win) = base.rsplit_once(':')?;
+        if sess.is_empty() || !win.starts_with('@') {
+            return None;
+        }
+        Some((sess, win, pane))
+    }
+
     fn target_window(session: &ProviderSession) -> Result<String> {
-        // focus_key: "session:@N|%pane" or "session:@N"
+        // focus_key: "session:@N|%pane" or "session:@N" → tmux target "session:@N"
         if let Some(ref key) = session.focus_key {
+            if let Some((sess, win, _)) = Self::parse_focus_key(key) {
+                return Ok(format!("{sess}:{win}"));
+            }
+            // Fallback: strip pane suffix only
             let base = key.split('|').next().unwrap_or(key);
-            return Ok(base.to_string());
+            if !base.is_empty() {
+                return Ok(base.to_string());
+            }
         }
         Err(TermorgError::ProviderCommand {
             message: format!("tmux session {} missing focus_key", session.id),
@@ -208,8 +234,7 @@ impl TmuxProvider {
     }
 
     fn session_name_from_key(focus_key: &str) -> Option<&str> {
-        let base = focus_key.split('|').next()?;
-        base.split(':').next()
+        Self::parse_focus_key(focus_key).map(|(s, _, _)| s)
     }
 }
 
@@ -285,11 +310,16 @@ impl TerminalProvider for TmuxProvider {
             .clone()
             .unwrap_or_else(|| req.kind.tab_title_hint(cwd));
 
-        // Pick a session: prefer endpoint (session name), else first existing, else create.
+        // Pick a session: prefer endpoint (tmux session name), else first existing, else create.
+        // Do not special-case the name "default" — that is a valid session name.
+        // Kitty unix: endpoints must not be treated as session names.
         let session_name = req
             .endpoint
-            .clone()
-            .filter(|s| !s.is_empty() && s != "default")
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .filter(|s| !s.starts_with("unix:") && !s.starts_with("tcp:"))
+            .map(|s| s.to_string())
             .or_else(|| {
                 self.run(&["display-message", "-p", "#{session_name}"])
                     .ok()
@@ -297,7 +327,6 @@ impl TerminalProvider for TmuxProvider {
                     .filter(|s| !s.is_empty())
             })
             .or_else(|| {
-                // first session from list
                 self.run(&["list-sessions", "-F", "#{session_name}"])
                     .ok()
                     .and_then(|s| s.lines().next().map(|l| l.to_string()))
@@ -455,6 +484,7 @@ pub fn tmux_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::{LaunchKind, LaunchRequest, TerminalProvider};
 
     #[test]
     fn parse_sample_windows() {
@@ -471,11 +501,190 @@ other\t@20\t1\tbash\t1\t/tmp\t99\tbash\t0\t%1
         assert!(!sessions[1].is_focused); // inactive window
         assert!(!sessions[2].is_focused); // session not attached
         assert_eq!(sessions[0].cwd.as_deref(), Some("/home/u/proj"));
-        assert!(sessions[0]
-            .focus_key
-            .as_deref()
-            .unwrap()
-            .starts_with("work:@12"));
-        assert!(sessions[0].focus_key.as_deref().unwrap().contains("%5"));
+        assert_eq!(sessions[0].focus_key.as_deref(), Some("work:@12|%5"));
+        assert_eq!(sessions[0].focus_window_id, Some(12));
+        assert_eq!(sessions[0].focus_tab_id, Some(1));
+        assert_eq!(sessions[0].title, "claude");
+    }
+
+    #[test]
+    fn parse_empty_and_malformed_do_not_invent_sessions() {
+        assert!(TmuxProvider::parse_windows_output("", "default").is_empty());
+        assert!(TmuxProvider::parse_windows_output("\n\n  \n", "s").is_empty());
+        // too few columns
+        let bad = "only\tfew\tcols\n";
+        assert!(TmuxProvider::parse_windows_output(bad, "s").is_empty());
+        // 8 fields minimum (no attached/pane) still accepted
+        let eight = "work\t@1\t0\tzsh\t1\t/tmp\t1\tzsh\n";
+        let s = TmuxProvider::parse_windows_output(eight, "sock");
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].id, "tmux:sock:@1");
+        assert_eq!(s[0].focus_key.as_deref(), Some("work:@1")); // no pane
+        assert!(!s[0].is_focused); // attached defaults false when field missing
+        assert_eq!(s[0].cwd.as_deref(), Some("/tmp"));
+    }
+
+    #[test]
+    fn parse_empty_cwd_is_none() {
+        let raw = "s\t@2\t0\tn\t0\t\t0\t\t1\t%9\n";
+        let s = TmuxProvider::parse_windows_output(raw, "d");
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].cwd, None);
+        assert_eq!(s[0].focus_key.as_deref(), Some("s:@2|%9"));
+        assert!(!s[0].is_focused); // inactive window even if attached
+    }
+
+    #[test]
+    fn parse_focus_key_handles_colon_in_session_name() {
+        let (sess, win, pane) =
+            TmuxProvider::parse_focus_key("proj:main:@7|%3").expect("parse");
+        assert_eq!(sess, "proj:main");
+        assert_eq!(win, "@7");
+        assert_eq!(pane, Some("%3"));
+        let (sess2, win2, pane2) = TmuxProvider::parse_focus_key("work:@1").expect("parse");
+        assert_eq!(sess2, "work");
+        assert_eq!(win2, "@1");
+        assert_eq!(pane2, None);
+        assert!(TmuxProvider::parse_focus_key("").is_none());
+        assert!(TmuxProvider::parse_focus_key("nocolon").is_none());
+    }
+
+    #[test]
+    fn target_window_from_session_focus_key() {
+        let mut s = TmuxProvider::parse_windows_output(
+            "work\t@12\t1\tx\t1\t/tmp\t1\tzsh\t1\t%5\n",
+            "default",
+        );
+        let sess = s.remove(0);
+        assert_eq!(
+            TmuxProvider::target_window(&sess).unwrap(),
+            "work:@12"
+        );
+    }
+
+    /// Live control plane on an isolated tmux socket (does not touch user server).
+    #[test]
+    fn live_list_focus_launch_ambient_isolated_socket() {
+        if Command::new("tmux")
+            .arg("-V")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| !s.success())
+            .unwrap_or(true)
+        {
+            eprintln!("tmux binary missing — skip live control-plane test");
+            return;
+        }
+
+        let sock = format!("termorg-ut-{}", std::process::id());
+        let _ = Command::new("tmux")
+            .args(["-L", &sock, "kill-server"])
+            .output();
+        let ok = Command::new("tmux")
+            .args([
+                "-L",
+                &sock,
+                "new-session",
+                "-d",
+                "-s",
+                "smoke",
+                "-n",
+                "main",
+                "-c",
+                "/tmp",
+            ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("could not start isolated tmux — skip live test");
+            return;
+        }
+
+        let provider = TmuxProvider::with_socket_name(&sock);
+        let listed = provider.list_sessions().expect("list");
+        assert_eq!(listed.len(), 1, "expected one window: {listed:?}");
+        assert_eq!(listed[0].provider, "tmux");
+        assert!(listed[0].id.contains("@"), "id={}", listed[0].id);
+        assert!(
+            listed[0].focus_key.as_deref().unwrap_or("").contains("smoke:"),
+            "focus_key={:?}",
+            listed[0].focus_key
+        );
+        assert_eq!(listed[0].cwd.as_deref(), Some("/tmp"));
+
+        provider.focus(&listed[0]).expect("focus");
+
+        provider
+            .set_tab_title(&listed[0], "ambient-title")
+            .expect("title");
+        let after_title = provider.list_sessions().expect("list2");
+        assert_eq!(after_title[0].title, "ambient-title");
+        // focus targeting must still work after rename
+        provider.focus(&after_title[0]).expect("focus after rename");
+
+        provider
+            .set_tab_color(
+                &after_title[0],
+                &["active_bg=#ff0000".into(), "active_fg=#ffffff".into()],
+            )
+            .expect("color");
+        // reset colors
+        provider
+            .set_tab_color(
+                &after_title[0],
+                &[
+                    "active_bg=NONE".into(),
+                    "active_fg=NONE".into(),
+                ],
+            )
+            .expect("color reset");
+
+        let launched = provider
+            .launch(&LaunchRequest {
+                kind: LaunchKind::Shell,
+                cwd: Some("/tmp".into()),
+                endpoint: Some("smoke".into()),
+                tab_title: Some("launched".into()),
+            })
+            .expect("launch shell");
+        assert!(
+            launched.native_id.as_deref().unwrap_or("").starts_with('@'),
+            "native_id={:?}",
+            launched.native_id
+        );
+        assert_eq!(launched.endpoint, "smoke");
+
+        let after = provider.list_sessions().expect("list after launch");
+        assert!(after.len() >= 2, "expected ≥2 windows, got {}", after.len());
+        let nid = launched.native_id.as_deref().unwrap();
+        assert!(
+            after.iter().any(|s| s.id.contains(nid)
+                || s.focus_key
+                    .as_deref()
+                    .is_some_and(|k| k.contains(nid))),
+            "launched {nid} not found in {after:?}"
+        );
+
+        // agent-kind launch path (command string); may exit quickly if binary missing —
+        // only assert the window appears when launch returns Ok.
+        if let Ok(l2) = provider.launch(&LaunchRequest {
+            kind: LaunchKind::Claude,
+            cwd: Some("/tmp".into()),
+            endpoint: Some("smoke".into()),
+            tab_title: Some("claude-win".into()),
+        }) {
+            let again = provider.list_sessions().expect("list claude");
+            let nid2 = l2.native_id.as_deref().unwrap_or("");
+            assert!(
+                again.iter().any(|s| s.id.contains(nid2)),
+                "claude window {nid2} missing"
+            );
+        }
+
+        let _ = Command::new("tmux")
+            .args(["-L", &sock, "kill-server"])
+            .output();
     }
 }

@@ -163,11 +163,11 @@ impl TerminalProvider for MultiProvider {
             Self::Both { kitty, tmux } => {
                 // Prefer backend implied by endpoint, else try kitty then tmux.
                 if let Some(ref ep) = req.endpoint {
-                    if ep.starts_with("unix:") {
+                    if ep.starts_with("unix:") || ep.starts_with("tcp:") {
                         return kitty.launch(req);
                     }
-                    // bare session name → tmux
-                    if !ep.contains('/') && !ep.contains(':') {
+                    // bare session name (no path/scheme) → tmux
+                    if !ep.contains('/') {
                         return tmux.launch(req);
                     }
                 }
@@ -211,9 +211,51 @@ impl TerminalProvider for MultiProvider {
         match self {
             Self::Kitty(k) => k.prefer_launch_endpoint(cwd),
             Self::Tmux(t) => t.prefer_launch_endpoint(cwd),
-            Self::Both { kitty, tmux } => kitty
-                .prefer_launch_endpoint(cwd)
-                .or_else(|| tmux.prefer_launch_endpoint(cwd)),
+            Self::Both { kitty, tmux } => {
+                // Prefer the backend that already has a session in this cwd.
+                if let Some(c) = cwd {
+                    let kitty_has = kitty
+                        .list_sessions()
+                        .ok()
+                        .is_some_and(|ss| ss.iter().any(|s| s.cwd.as_deref() == Some(c)));
+                    let tmux_has = tmux
+                        .list_sessions()
+                        .ok()
+                        .is_some_and(|ss| ss.iter().any(|s| s.cwd.as_deref() == Some(c)));
+                    if tmux_has && !kitty_has {
+                        return tmux.prefer_launch_endpoint(Some(c));
+                    }
+                    if kitty_has && !tmux_has {
+                        return kitty.prefer_launch_endpoint(Some(c));
+                    }
+                }
+                kitty
+                    .prefer_launch_endpoint(cwd)
+                    .or_else(|| tmux.prefer_launch_endpoint(cwd))
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_kind_parse() {
+        assert_eq!(ProviderKind::parse("tmux"), Some(ProviderKind::Tmux));
+        assert_eq!(ProviderKind::parse("KITTY"), Some(ProviderKind::Kitty));
+        assert_eq!(ProviderKind::parse("all"), Some(ProviderKind::All));
+        assert_eq!(ProviderKind::parse("auto"), Some(ProviderKind::All));
+        assert_eq!(ProviderKind::parse("both"), Some(ProviderKind::All));
+        assert!(ProviderKind::parse("wezterm").is_none());
+    }
+
+    #[test]
+    fn from_kind_tmux_constructs_without_kitty() {
+        let p = MultiProvider::from_kind(ProviderKind::Tmux, None).expect("tmux");
+        assert_eq!(p.provider_id(), "tmux");
+        let caps = p.capabilities();
+        assert!(caps.list && caps.focus && caps.launch && caps.ambient);
     }
 }
