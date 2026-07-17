@@ -10,7 +10,7 @@ use crate::error::Result;
 use crate::filter;
 use crate::hints;
 use crate::notify;
-use crate::provider::{self, KittyProvider, LaunchKind, LaunchRequest, TerminalProvider};
+use crate::provider::{self, LaunchKind, LaunchRequest, TerminalProvider};
 use crate::queue;
 use crate::signals::{self, SignalState};
 use crate::store::{
@@ -27,7 +27,7 @@ pub(crate) fn cmd_hook(state: Option<&str>, reason: Option<&str>, list: bool) ->
         }
         for s in sigs {
             println!(
-                "{:<10}  kitty={}:{:?}  cwd={}  reason={}  src={}  sess={}",
+                "{:<10}  kitty={}:{:?}  tmux={}  cwd={}  reason={}  src={}  sess={}",
                 match s.state {
                     SignalState::NeedsYou => "needs_you",
                     SignalState::Working => "working",
@@ -35,6 +35,7 @@ pub(crate) fn cmd_hook(state: Option<&str>, reason: Option<&str>, list: bool) ->
                 },
                 s.kitty_pid.as_deref().unwrap_or("-"),
                 s.kitty_window_id,
+                s.tmux_pane.as_deref().unwrap_or("-"),
                 s.cwd.as_deref().unwrap_or("-"),
                 s.reason.as_deref().unwrap_or("-"),
                 s.source.as_deref().unwrap_or("-"),
@@ -585,7 +586,7 @@ pub(crate) fn cmd_hints(provider: &dyn TerminalProvider, action: HintsCmd) -> Re
 }
 
 pub(crate) fn cmd_launch(
-    provider: &KittyProvider,
+    provider: &dyn TerminalProvider,
     agent: &str,
     cwd: Option<&str>,
     group: Option<&str>,
@@ -601,7 +602,7 @@ pub(crate) fn cmd_launch(
         .or_else(|| std::env::var("PWD").ok());
     let endpoint = endpoint
         .map(|s| s.to_string())
-        .or_else(|| provider.prefer_endpoint_for_cwd(cwd.as_deref()));
+        .or_else(|| provider.prefer_launch_endpoint(cwd.as_deref()));
     let req = LaunchRequest {
         kind,
         cwd: cwd.clone(),
@@ -610,9 +611,10 @@ pub(crate) fn cmd_launch(
     };
     let result = provider.launch(&req)?;
     println!(
-        "launched {} tab  win={:?}  cwd={}  via {}",
+        "launched {}  win={:?}  native={:?}  cwd={}  via {}",
         kind.as_str(),
         result.window_id,
+        result.native_id,
         result.cwd.as_deref().unwrap_or("—"),
         result.endpoint
     );
@@ -639,25 +641,40 @@ fn find_launched_session<'a>(
     sessions: &'a [provider::ProviderSession],
     result: &provider::LaunchResult,
 ) -> Option<&'a provider::ProviderSession> {
-    if let Some(wid) = result.window_id {
+    // tmux: native_id is `@N`; match via focus_key / id / focus_window_id
+    if let Some(ref nid) = result.native_id {
         if let Some(s) = sessions.iter().find(|s| {
-            s.focus_window_id == Some(wid)
-                && s.focus_endpoint.as_deref() == Some(result.endpoint.as_str())
+            s.id.contains(nid.as_str())
+                || s.focus_key
+                    .as_deref()
+                    .is_some_and(|k| k.contains(nid.as_str()))
+                || s.focus_window_id
+                    .map(|w| format!("@{w}") == *nid || w.to_string() == *nid)
+                    .unwrap_or(false)
         }) {
             return Some(s);
         }
     }
-    // Fallback: newest session with matching cwd on that endpoint.
+    if let Some(wid) = result.window_id {
+        if let Some(s) = sessions.iter().find(|s| {
+            s.focus_window_id == Some(wid)
+                && (s.focus_endpoint.as_deref() == Some(result.endpoint.as_str())
+                    || s.focus_key
+                        .as_deref()
+                        .is_some_and(|k| k.starts_with(&format!("{}:", result.endpoint))))
+        }) {
+            return Some(s);
+        }
+    }
+    // Fallback: matching cwd (prefer agent class)
     let mut candidates: Vec<_> = sessions
         .iter()
-        .filter(|s| s.focus_endpoint.as_deref() == Some(result.endpoint.as_str()))
         .filter(|s| match (&result.cwd, &s.cwd) {
             (Some(a), Some(b)) => a == b,
             (None, _) => true,
             _ => false,
         })
         .collect();
-    // Prefer agent class match
     candidates.sort_by_key(|s| {
         let agent_ok = match result.kind {
             LaunchKind::Shell => s.agent.as_str() == "shell" || s.agent.as_str() == "unknown",
@@ -672,7 +689,7 @@ fn find_launched_session<'a>(
 }
 
 pub(crate) fn cmd_watch(
-    provider: &KittyProvider,
+    provider: &dyn TerminalProvider,
     interval_secs: u64,
     do_notify: bool,
 ) -> Result<()> {

@@ -5,7 +5,7 @@ mod commands;
 
 use clap::Parser;
 
-use crate::provider::KittyProvider;
+use crate::provider::{MultiProvider, ProviderKind};
 use args::{Cli, Commands, HintsCmd, QueueCmd};
 use commands::{
     cmd_assign, cmd_focus, cmd_group, cmd_hints, cmd_hook, cmd_launch, cmd_list, cmd_priority,
@@ -16,7 +16,7 @@ use commands::{
 pub fn run() {
     let cli = Cli::parse();
 
-    // Hook path must stay fast and independent of Kitty (agent hooks).
+    // Hook path must stay fast and independent of terminal providers (agent hooks).
     if let Commands::Hook {
         state,
         reason,
@@ -30,7 +30,20 @@ pub fn run() {
         return;
     }
 
-    let provider = build_provider(cli.kitty_to.as_deref());
+    let kind = ProviderKind::parse(&cli.provider).unwrap_or_else(|| {
+        eprintln!(
+            "termorg: unknown --provider `{}` (use kitty|tmux|all)",
+            cli.provider
+        );
+        std::process::exit(2);
+    });
+    let provider = match build_provider(kind, cli.kitty_to.as_deref()) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("termorg: {e}");
+            std::process::exit(1);
+        }
+    };
 
     let result = match cli.command {
         Commands::List { json, flat, filter } => cmd_list(&provider, json, flat, filter.as_deref()),
@@ -39,7 +52,7 @@ pub fn run() {
             no_notify,
         } => cmd_watch(&provider, interval, !no_notify),
         Commands::Panel => {
-            if let Err(e) = crate::ui::run_panel(provider) {
+            if let Err(e) = crate::ui::run_panel(provider, kind, cli.kitty_to.clone()) {
                 eprintln!("termorg: {e}");
                 std::process::exit(1);
             }
@@ -77,9 +90,6 @@ pub fn run() {
     }
 }
 
-fn build_provider(kitty_to: Option<&str>) -> KittyProvider {
-    match kitty_to {
-        Some(to) => KittyProvider::with_listen_on(to),
-        None => KittyProvider::new(),
-    }
+fn build_provider(kind: ProviderKind, kitty_to: Option<&str>) -> crate::error::Result<MultiProvider> {
+    MultiProvider::from_kind(kind, kitty_to)
 }

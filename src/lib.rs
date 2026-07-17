@@ -19,4 +19,7 @@ pub mod store;
 pub mod ui;
 
 pub use error::{Result, TermorgError};
-pub use provider::{KittyProvider, LaunchKind, LaunchRequest, ProviderSession, TerminalProvider};
+pub use provider::{
+    KittyProvider, LaunchKind, LaunchRequest, MultiProvider, ProviderKind, ProviderSession,
+    TerminalProvider, TmuxProvider,
+};

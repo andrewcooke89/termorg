@@ -1,6 +1,7 @@
-//! FS12 — ambient Kitty cues (tab bar color + optional title prefix).
+//! FS12 — ambient cues (tab bar / window style color + optional title prefix).
 //!
-//! Glance at the tab strip and get the same story as the panel:
+//! Glance at the tab strip (Kitty) or window name (tmux) and get the same story
+//! as the panel:
 //!   - **Color** → attention (needs_you / working) or agent when idle
 //!   - **Title prefix** → `!` needs you · `…` working (optional)
 //!
@@ -13,7 +14,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::attention::Attention;
-use crate::provider::{KittyProvider, ProviderSession};
+use crate::provider::{ProviderSession, TerminalProvider};
 
 const PREFIX_NEED: &str = "! ";
 const PREFIX_WORK: &str = "… ";
@@ -246,7 +247,7 @@ impl AmbientApplier {
         self.cfg = load_config();
     }
 
-    pub fn apply_all(&mut self, provider: &KittyProvider, sessions: &[ProviderSession]) {
+    pub fn apply_all(&mut self, provider: &dyn TerminalProvider, sessions: &[ProviderSession]) {
         if !self.cfg.enabled {
             return;
         }
@@ -258,7 +259,7 @@ impl AmbientApplier {
         self.last.retain(|id, _| seen.contains(id));
     }
 
-    fn apply_one(&mut self, provider: &KittyProvider, session: &ProviderSession) {
+    fn apply_one(&mut self, provider: &dyn TerminalProvider, session: &ProviderSession) {
         let colors = tab_colors(session);
         let title = if self.cfg.set_titles {
             desired_title(session)
@@ -276,10 +277,11 @@ impl AmbientApplier {
             return;
         }
 
-        if self.cfg.set_colors {
+        let caps = provider.capabilities();
+        if self.cfg.set_colors && caps.ambient {
             let _ = provider.set_tab_color(session, &colors.args);
         }
-        if self.cfg.set_titles && !title.is_empty() && session.title != title {
+        if self.cfg.set_titles && caps.ambient && !title.is_empty() && session.title != title {
             let _ = provider.set_tab_title(session, &title);
         }
 
@@ -304,6 +306,7 @@ mod tests {
             focus_endpoint: None,
             focus_tab_id: Some(1),
             focus_window_id: None,
+            focus_key: None,
             agent,
             attention,
         }

@@ -65,6 +65,9 @@ pub struct AgentSignal {
     pub kitty_pid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kitty_window_id: Option<u32>,
+    /// tmux pane id (e.g. `%5`) from `TMUX_PANE` for precise hook matching.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux_pane: Option<String>,
     pub updated_at: u64,
     #[serde(default = "default_ttl")]
     pub ttl_secs: u64,
@@ -87,6 +90,7 @@ pub struct MatchHint<'a> {
     pub cwd: Option<&'a str>,
     pub kitty_pid: Option<&'a str>,
     pub kitty_window_id: Option<u32>,
+    pub tmux_pane: Option<&'a str>,
 }
 
 pub fn signals_path() -> PathBuf {
@@ -169,6 +173,12 @@ pub fn lookup(hint: MatchHint<'_>) -> Option<AgentSignal> {
 }
 
 fn match_rank(sig: &AgentSignal, hint: MatchHint<'_>) -> Option<u8> {
+    // 0 = exact tmux pane (best for multi-window same-cwd setups)
+    if let (Some(sp), Some(hp)) = (sig.tmux_pane.as_deref(), hint.tmux_pane) {
+        if sp == hp {
+            return Some(0);
+        }
+    }
     // 0 = exact kitty window in same instance
     if let (Some(sp), Some(hp), Some(sw), Some(hw)) = (
         sig.kitty_pid.as_deref(),
@@ -188,6 +198,16 @@ fn match_rank(sig: &AgentSignal, hint: MatchHint<'_>) -> Option<u8> {
         hint.cwd,
     ) {
         if sp == hp && paths_equal(sc, hc) {
+            return Some(1);
+        }
+    }
+    // 1 = tmux pane missing but cwd match with a tmux-sourced signal
+    if let (Some(_), Some(sc), Some(hc)) = (
+        sig.tmux_pane.as_deref(),
+        sig.cwd.as_deref(),
+        hint.cwd,
+    ) {
+        if paths_equal(sc, hc) {
             return Some(1);
         }
     }
@@ -237,6 +257,11 @@ pub fn record(mut sig: AgentSignal) -> Result<()> {
 fn same_slot(a: &AgentSignal, b: &AgentSignal) -> bool {
     if let (Some(x), Some(y)) = (&a.agent_session_id, &b.agent_session_id) {
         if !x.is_empty() && x == y {
+            return true;
+        }
+    }
+    if let (Some(ap), Some(bp)) = (a.tmux_pane.as_deref(), b.tmux_pane.as_deref()) {
+        if !ap.is_empty() && ap == bp {
             return true;
         }
     }
@@ -336,6 +361,7 @@ pub fn ingest_hook_json(raw: &str) -> Result<Option<AgentSignal>> {
     let kitty_window_id = std::env::var("KITTY_WINDOW_ID")
         .ok()
         .and_then(|s| s.parse().ok());
+    let tmux_pane = std::env::var("TMUX_PANE").ok().filter(|s| !s.is_empty());
 
     let agent_hint = detect_agent_source(&v);
     let source = Some(format!("{agent_hint}:{event}"));
@@ -348,6 +374,7 @@ pub fn ingest_hook_json(raw: &str) -> Result<Option<AgentSignal>> {
         cwd,
         kitty_pid,
         kitty_window_id,
+        tmux_pane,
         updated_at: now_secs(),
         ttl_secs: DEFAULT_TTL_SECS,
     };
@@ -463,6 +490,7 @@ pub fn record_manual(state: SignalState, reason: &str) -> Result<AgentSignal> {
         kitty_window_id: std::env::var("KITTY_WINDOW_ID")
             .ok()
             .and_then(|s| s.parse().ok()),
+        tmux_pane: std::env::var("TMUX_PANE").ok().filter(|s| !s.is_empty()),
         updated_at: now_secs(),
         ttl_secs: DEFAULT_TTL_SECS,
     };
@@ -505,6 +533,7 @@ mod tests {
                 cwd: Some("/tmp/proj"),
                 kitty_pid: Some("999"),
                 kitty_window_id: Some(7),
+                tmux_pane: None,
             });
             assert_eq!(found.unwrap().state, SignalState::NeedsYou);
             std::env::remove_var("KITTY_PID");
@@ -527,6 +556,7 @@ mod tests {
                 cwd: Some("/x"),
                 kitty_pid: Some("1"),
                 kitty_window_id: Some(2),
+                tmux_pane: None,
             })
             .unwrap();
             assert_eq!(found.state, SignalState::Working);
@@ -547,6 +577,7 @@ mod tests {
                 cwd: Some("/other".into()),
                 kitty_pid: Some("111".into()),
                 kitty_window_id: Some(9),
+                tmux_pane: None,
                 updated_at: now_secs(),
                 ttl_secs: DEFAULT_TTL_SECS,
             })
@@ -559,6 +590,7 @@ mod tests {
                 cwd: Some("/proj".into()),
                 kitty_pid: Some("222".into()),
                 kitty_window_id: Some(3),
+                tmux_pane: None,
                 updated_at: now_secs(),
                 ttl_secs: DEFAULT_TTL_SECS,
             })
@@ -567,10 +599,34 @@ mod tests {
                 cwd: Some("/proj"),
                 kitty_pid: Some("222"),
                 kitty_window_id: Some(3),
+                tmux_pane: None,
             })
             .expect("second signal must match even when first does not");
             assert_eq!(found.state, SignalState::NeedsYou);
             assert_eq!(found.reason.as_deref(), Some("me"));
+        });
+    }
+
+    #[test]
+    fn tmux_pane_match_preferred() {
+        with_temp_config(|| {
+            std::env::set_var("TMUX_PANE", "%42");
+            let raw = r#"{
+              "hook_event_name": "Notification",
+              "session_id": "t1",
+              "cwd": "/tmp/tmux-proj"
+            }"#;
+            let sig = ingest_hook_json(raw).unwrap().expect("recorded");
+            assert_eq!(sig.tmux_pane.as_deref(), Some("%42"));
+            let found = lookup(MatchHint {
+                cwd: Some("/tmp/other"),
+                kitty_pid: None,
+                kitty_window_id: None,
+                tmux_pane: Some("%42"),
+            })
+            .expect("pane match");
+            assert_eq!(found.state, SignalState::NeedsYou);
+            std::env::remove_var("TMUX_PANE");
         });
     }
 

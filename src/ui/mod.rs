@@ -19,7 +19,7 @@ use crate::filter::{self, session_matches};
 use crate::hints::{self, PathHintSuggestion};
 use crate::notify::NotifyTracker;
 use crate::provider::{
-    KittyProvider, LaunchKind, LaunchRequest, ProviderSession, TerminalProvider,
+    MultiProvider, ProviderKind, LaunchKind, LaunchRequest, ProviderSession, TerminalProvider,
 };
 use crate::queue::build_action_queue;
 use crate::store::{
@@ -33,7 +33,11 @@ const REFRESH: Duration = Duration::from_millis(1000);
 /// Live sessions + prefs; views are rebuilt with FS10 filter on the UI thread.
 type Snapshot = std::result::Result<(Vec<ProviderSession>, UserState), String>;
 
-pub fn run_panel(provider: KittyProvider) -> Result<(), String> {
+pub fn run_panel(
+    provider: MultiProvider,
+    kind: ProviderKind,
+    kitty_to: Option<String>,
+) -> Result<(), String> {
     let sock = panel_socket_path();
     if let Some(parent) = sock.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -97,7 +101,7 @@ pub fn run_panel(provider: KittyProvider) -> Result<(), String> {
                         let state = load_and_rebind(&sessions).unwrap_or_default();
                         // FS11: rising-edge needs_you → desktop notify (skip focused/muted).
                         notifier.process(&sessions, &state);
-                        // FS12: tab bar color/title from agent + attention.
+                        // FS12: tab/window color/title from agent + attention.
                         ambient.apply_all(&provider, &sessions);
                         Ok((sessions, state))
                     }
@@ -112,7 +116,7 @@ pub fn run_panel(provider: KittyProvider) -> Result<(), String> {
     }
 
     let focus_note: FocusNote = Arc::new(Mutex::new(None));
-    let state = PanelState::new(snapshot, show_flag, quit_flag, focus_note);
+    let state = PanelState::new(snapshot, show_flag, quit_flag, focus_note, kind, kitty_to);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -189,6 +193,9 @@ struct PanelState {
     launch_group: String,
     /// FS15 path→group suggestions for unassigned tabs.
     path_suggestions: Vec<PathHintSuggestion>,
+    /// Backend selection for focus/launch (rebuild MultiProvider on demand).
+    provider_kind: ProviderKind,
+    kitty_to: Option<String>,
 }
 
 impl PanelState {
@@ -197,6 +204,8 @@ impl PanelState {
         show_flag: Arc<AtomicBool>,
         quit_flag: Arc<AtomicBool>,
         focus_note: FocusNote,
+        provider_kind: ProviderKind,
+        kitty_to: Option<String>,
     ) -> Self {
         let mut s = Self {
             snapshot,
@@ -219,6 +228,8 @@ impl PanelState {
             launch_cwd: std::env::var("PWD").unwrap_or_default(),
             launch_group: String::new(),
             path_suggestions: Vec::new(),
+            provider_kind,
+            kitty_to,
         };
         s.apply_snapshot();
         s
@@ -287,9 +298,12 @@ impl PanelState {
         } else {
             Some(cwd.to_string())
         };
+        let provider_kind = self.provider_kind;
+        let kitty_to = self.kitty_to.clone();
         let endpoint = {
-            let p = KittyProvider::new();
-            p.prefer_endpoint_for_cwd(cwd.as_deref())
+            let p = MultiProvider::from_kind(provider_kind, kitty_to.as_deref())
+                .unwrap_or_else(|_| crate::provider::detect_providers(kitty_to.as_deref()));
+            p.prefer_launch_endpoint(cwd.as_deref())
         };
         let group = self.launch_group.trim().to_string();
         let group = if group.is_empty() { None } else { Some(group) };
@@ -301,7 +315,8 @@ impl PanelState {
             tab_title: None,
         };
         thread::spawn(move || {
-            let provider = KittyProvider::new();
+            let provider = MultiProvider::from_kind(provider_kind, kitty_to.as_deref())
+                .unwrap_or_else(|_| crate::provider::detect_providers(kitty_to.as_deref()));
             let msg = match provider.launch(&req) {
                 Ok(result) => {
                     let mut status = format!(
@@ -315,17 +330,21 @@ impl PanelState {
                             let found = sessions
                                 .iter()
                                 .find(|s| {
-                                    result.window_id.is_some()
-                                        && s.focus_window_id == result.window_id
-                                        && s.focus_endpoint.as_deref()
-                                            == Some(result.endpoint.as_str())
+                                    result.native_id.as_ref().is_some_and(|nid| {
+                                        s.id.contains(nid.as_str())
+                                            || s.focus_key
+                                                .as_deref()
+                                                .is_some_and(|k| k.contains(nid.as_str()))
+                                    })
                                 })
                                 .or_else(|| {
                                     sessions.iter().find(|s| {
-                                        s.focus_endpoint.as_deref()
-                                            == Some(result.endpoint.as_str())
-                                            && s.cwd == result.cwd
+                                        result.window_id.is_some()
+                                            && s.focus_window_id == result.window_id
                                     })
+                                })
+                                .or_else(|| {
+                                    sessions.iter().find(|s| s.cwd == result.cwd)
                                 });
                             if let Some(session) = found {
                                 match UserState::load() {
@@ -459,8 +478,11 @@ impl PanelState {
     fn focus_session(&self, session: &ProviderSession) {
         let session = session.clone();
         let note = Arc::clone(&self.focus_note);
+        let provider_kind = self.provider_kind;
+        let kitty_to = self.kitty_to.clone();
         thread::spawn(move || {
-            let provider = KittyProvider::new();
+            let provider = MultiProvider::from_kind(provider_kind, kitty_to.as_deref())
+                .unwrap_or_else(|_| crate::provider::detect_providers(kitty_to.as_deref()));
             let msg = match provider.focus(&session) {
                 Ok(()) => format!("focused {}", session.id),
                 Err(e) => format!("focus failed: {e}"),

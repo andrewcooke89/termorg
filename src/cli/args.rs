@@ -12,6 +12,10 @@ pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Commands,
 
+    /// Terminal backend: kitty | tmux | all (default: auto-detect both).
+    #[arg(long, global = true, env = "TERMORG_PROVIDER", default_value = "all")]
+    pub(crate) provider: String,
+
     /// Kitty remote-control address (unix:/path or tcp:…).
     #[arg(long, global = true, env = "TERMORG_KITTY_LISTEN_ON")]
     pub(crate) kitty_to: Option<String>,
@@ -73,7 +77,7 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: Option<HintsCmd>,
     },
-    /// Launch a new Kitty tab (FS13): shell or agent in a cwd / group.
+    /// Launch a new tab/window (FS13): shell or agent in a cwd / group.
     Launch {
         /// shell | claude | grok | kilo | codex (default: shell)
         #[arg(long, short = 'a', default_value = "shell")]
@@ -84,10 +88,10 @@ pub(crate) enum Commands {
         /// Assign the new tab to this manual group (id or title) after launch
         #[arg(long, short = 'g')]
         group: Option<String>,
-        /// Kitty remote-control endpoint (unix:…). Default: auto.
+        /// Provider endpoint: Kitty `unix:…` or tmux session name. Default: auto.
         #[arg(long)]
         endpoint: Option<String>,
-        /// Tab title override
+        /// Tab/window title override
         #[arg(long)]
         title: Option<String>,
     },

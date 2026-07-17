@@ -263,6 +263,7 @@ mod tests {
             focus_endpoint: None,
             focus_tab_id: None,
             focus_window_id: None,
+            focus_key: None,
             agent: crate::agent::AgentClass::Shell,
             attention: crate::attention::Attention::Idle,
         }

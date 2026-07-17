@@ -125,6 +125,7 @@ impl TerminalProvider for KittyProvider {
             list: true,
             focus: true,
             launch: true,
+            ambient: true,
         }
     }
 
@@ -262,9 +263,23 @@ impl TerminalProvider for KittyProvider {
             endpoint,
             cwd: cwd.map(|s| s.to_string()),
             kind: req.kind,
+            native_id: window_id.map(|w| w.to_string()),
         })
     }
+
+    fn set_tab_title(&self, session: &ProviderSession, title: &str) -> Result<()> {
+        KittyProvider::set_tab_title(self, session, title)
+    }
+
+    fn set_tab_color(&self, session: &ProviderSession, color_args: &[String]) -> Result<()> {
+        KittyProvider::set_tab_color(self, session, color_args)
+    }
+
+    fn prefer_launch_endpoint(&self, cwd: Option<&str>) -> Option<String> {
+        self.prefer_endpoint_for_cwd(cwd)
+    }
 }
+
 
 #[cfg(test)]
 mod tests {

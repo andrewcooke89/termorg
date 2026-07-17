@@ -1,36 +1,42 @@
 //! Terminal provider boundary (D10).
 //!
-//! UI/domain code depends on this trait — not on Kitty remote-control details.
+//! Domain/UI code depends on [`TerminalProvider`] — not on Kitty/tmux details.
 
 mod kitty;
+mod multi;
+mod tmux;
 
 pub use kitty::KittyProvider;
+pub use multi::{detect_providers, MultiProvider, ProviderKind};
+pub use tmux::{tmux_available, TmuxProvider};
 
 use crate::agent::AgentClass;
 use crate::attention::Attention;
 use crate::error::Result;
 
-/// Live session discovered from a terminal emulator (one tab).
+/// Live session discovered from a terminal host (one tab / tmux window).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderSession {
-    /// Provider id, e.g. `"kitty"`.
+    /// Provider id, e.g. `"kitty"` or `"tmux"`.
     pub provider: String,
-    /// Stable within the provider while the tab lives.
+    /// Stable within the provider while the tab/window lives.
     pub id: String,
     /// Best-effort human title.
     pub title: String,
     /// Optional working directory if the provider reports it.
     pub cwd: Option<String>,
-    /// Whether this tab is focused in its OS window.
+    /// Whether this tab/window is focused in its host.
     pub is_focused: bool,
     /// OS window id if applicable (display only).
     pub os_window_id: Option<u32>,
-    /// Provider endpoint for focus (e.g. `unix:/path/to.sock`). Opaque outside provider.
+    /// Provider endpoint for control (Kitty socket, tmux socket name, …).
     pub focus_endpoint: Option<String>,
-    /// Kitty tab id (or equivalent) for focus matching.
+    /// Tab/window index when numeric.
     pub focus_tab_id: Option<u32>,
-    /// Kitty window id inside the tab (for focus-window).
+    /// Nested window/pane numeric id when applicable.
     pub focus_window_id: Option<u32>,
+    /// Opaque focus target for the provider (e.g. tmux `session:@12|%5`).
+    pub focus_key: Option<String>,
     /// Detected agent/tool class (FS5).
     pub agent: AgentClass,
     /// Attention state (FS7).
@@ -43,9 +49,10 @@ pub struct Capabilities {
     pub list: bool,
     pub focus: bool,
     pub launch: bool,
+    pub ambient: bool,
 }
 
-/// What to run in a newly launched tab (FS13).
+/// What to run in a newly launched tab/window (FS13).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchKind {
     Shell,
@@ -77,7 +84,7 @@ impl LaunchKind {
         }
     }
 
-    /// argv for Kitty `launch` (empty = default shell).
+    /// argv for the child process (empty = default shell).
     pub fn command_argv(self) -> Vec<String> {
         match self {
             Self::Shell => Vec::new(),
@@ -109,24 +116,26 @@ impl LaunchKind {
 #[derive(Debug, Clone)]
 pub struct LaunchRequest {
     pub kind: LaunchKind,
-    /// Working directory for the new tab.
+    /// Working directory for the new tab/window.
     pub cwd: Option<String>,
-    /// Kitty remote-control endpoint (`unix:…`). If None, provider picks one.
+    /// Provider-specific launch context (Kitty socket, tmux session name, …).
     pub endpoint: Option<String>,
-    /// Optional tab title override.
+    /// Optional tab/window title override.
     pub tab_title: Option<String>,
 }
 
 /// Result of a successful launch.
 #[derive(Debug, Clone)]
 pub struct LaunchResult {
-    /// Kitty window id (when known).
+    /// Numeric window id when available (Kitty).
     pub window_id: Option<u32>,
-    /// Endpoint used.
+    /// Provider context used (socket / session).
     pub endpoint: String,
     /// Working directory requested.
     pub cwd: Option<String>,
     pub kind: LaunchKind,
+    /// Opaque native id (e.g. tmux `@12`).
+    pub native_id: Option<String>,
 }
 
 /// Abstract access to a terminal host.
@@ -135,14 +144,42 @@ pub trait TerminalProvider: Send + Sync {
     fn capabilities(&self) -> Capabilities;
     fn list_sessions(&self) -> Result<Vec<ProviderSession>>;
 
-    /// Bring the given session to the front (FS4).
+    /// Bring the given session to the front.
     fn focus(&self, session: &ProviderSession) -> Result<()>;
 
-    /// Open a new tab/window (FS13). Default: unsupported.
+    /// Open a new tab/window. Default: unsupported.
     fn launch(&self, _req: &LaunchRequest) -> Result<LaunchResult> {
         Err(crate::error::TermorgError::ProviderCommand {
-            message: format!("launch not supported by provider `{}`", self.provider_id()),
+            message: format!(
+                "launch not supported by provider `{}`",
+                self.provider_id()
+            ),
         })
+    }
+
+    /// Ambient title (optional).
+    fn set_tab_title(&self, _session: &ProviderSession, _title: &str) -> Result<()> {
+        Err(crate::error::TermorgError::ProviderCommand {
+            message: format!(
+                "ambient titles not supported by provider `{}`",
+                self.provider_id()
+            ),
+        })
+    }
+
+    /// Ambient colors (optional). `color_args` are Kitty-style `active_bg=#rrggbb` tokens.
+    fn set_tab_color(&self, _session: &ProviderSession, _color_args: &[String]) -> Result<()> {
+        Err(crate::error::TermorgError::ProviderCommand {
+            message: format!(
+                "ambient colors not supported by provider `{}`",
+                self.provider_id()
+            ),
+        })
+    }
+
+    /// Hint for launch placement (socket / session name).
+    fn prefer_launch_endpoint(&self, _cwd: Option<&str>) -> Option<String> {
+        None
     }
 }
 

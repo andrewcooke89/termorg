@@ -109,6 +109,7 @@ mod tests {
             focus_endpoint: None,
             focus_tab_id: None,
             focus_window_id: None,
+            focus_key: None,
             agent: AgentClass::Shell,
             attention,
         }
