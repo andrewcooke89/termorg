@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use eframe::egui::{self, Color32, RichText, Sense, Vec2};
+use eframe::egui::{self, Color32, RichText};
 use eframe::epaint::CornerRadius;
 
 use crate::filter::{self, session_matches};
@@ -26,6 +26,7 @@ use crate::queue::build_action_queue;
 use crate::store::{
     build_display_sections, load_and_rebind, DisplaySection, ManualGroup, Priority, UserState,
 };
+use theme::{self as th};
 
 type FocusNote = Arc<Mutex<Option<String>>>;
 
@@ -122,8 +123,8 @@ pub fn run_panel(
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Terminal Organiser")
-            .with_inner_size([460.0, 620.0])
-            .with_min_inner_size([320.0, 280.0])
+            .with_inner_size([520.0, 700.0])
+            .with_min_inner_size([360.0, 360.0])
             .with_app_id("termorg"),
         ..Default::default()
     };
@@ -197,6 +198,8 @@ struct PanelState {
     /// Backend selection for focus/launch (rebuild MultiProvider on demand).
     provider_kind: ProviderKind,
     kitty_to: Option<String>,
+    /// Expand groups / launch tools in the top bar.
+    show_tools: bool,
 }
 
 impl PanelState {
@@ -231,9 +234,30 @@ impl PanelState {
             path_suggestions: Vec::new(),
             provider_kind,
             kitty_to,
+            show_tools: false,
         };
         s.apply_snapshot();
         s
+    }
+
+    fn pulse(&self, ctx: &egui::Context) -> f32 {
+        // 0..1 gentle triangle for needs_you emphasis
+        let t = ctx.input(|i| i.time) as f32;
+        (t * std::f32::consts::TAU * 0.7).sin().abs()
+    }
+
+    fn provider_counts(&self) -> (usize, usize, usize) {
+        let mut kitty = 0usize;
+        let mut tmux = 0usize;
+        let mut other = 0usize;
+        for s in &self.all_sessions {
+            match s.provider.as_str() {
+                "kitty" => kitty += 1,
+                "tmux" => tmux += 1,
+                _ => other += 1,
+            }
+        }
+        (kitty, tmux, other)
     }
 
     fn accept_hint(&mut self, session_id: &str) {
@@ -809,510 +833,551 @@ impl eframe::App for PanelState {
             }
         }
 
-        ctx.request_repaint_after(Duration::from_millis(200));
+        // Smooth pulse for needs_you rows
+        ctx.request_repaint_after(Duration::from_millis(50));
+        let pulse = self.pulse(ctx);
+        let (n_kitty, n_tmux, _) = self.provider_counts();
+        let n_queue = self.action_queue.len();
+        let n_manual = self.manual_groups.len();
+        let n_hints = self.path_suggestions.len();
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("Terminal Organiser")
-                        .strong()
-                        .size(16.0)
-                        .color(Color32::from_rgb(122, 162, 247)),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(RichText::new("Quit").small()).clicked() {
-                        self.request_quit(ctx);
-                    }
-                    if ui.button(RichText::new("Refresh").small()).clicked() {
-                        self.apply_snapshot();
-                    }
-                });
-            });
-            ui.label(
-                RichText::new(&self.status)
-                    .small()
-                    .color(Color32::from_rgb(86, 95, 137)),
-            );
-            ui.add_space(4.0);
-            // FS10 search — Enter focuses first/selected match even while typing here.
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("Filter")
-                        .small()
-                        .color(Color32::from_rgb(122, 162, 247)),
-                );
-                let te = egui::TextEdit::singleline(&mut self.filter_query)
-                    .desired_width(220.0)
-                    .hint_text("title · path · agent · Enter = focus · / to jump here")
-                    .id_source("termorg_filter");
-                let resp = ui.add(te);
-                if self.focus_filter {
-                    resp.request_focus();
-                    self.focus_filter = false;
-                }
-                if resp.changed() {
-                    self.rebuild_views();
-                }
-                // Enter while filter focused → focus match (don't leave the query).
-                if resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    self.focus_current_or_first();
-                }
-                if !self.filter_query.is_empty()
-                    && ui
-                        .small_button("✕")
-                        .on_hover_text("Clear filter (Esc)")
-                        .clicked()
-                {
-                    self.filter_query.clear();
-                    self.rebuild_views();
-                }
-            });
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("New group").small());
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.new_group_name)
-                        .desired_width(140.0)
-                        .hint_text("Trading"),
-                );
-                if ui.button(RichText::new("Create").small()).clicked() {
-                    self.create_group_from_field();
-                }
-            });
-            if !self.manual_groups.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Delete group:").small());
-                    let groups = self.manual_groups.clone();
-                    for g in groups {
+        egui::TopBottomPanel::top("top")
+            .frame(
+                egui::Frame::new()
+                    .fill(th::BG_ELEVATED)
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .stroke(egui::Stroke::new(1.0, Color32::from_rgb(36, 40, 56))),
+            )
+            .show(ctx, |ui| {
+                // Title row
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("termorg").strong().size(17.0).color(th::BLUE));
+                    ui.label(
+                        RichText::new("Terminal Organiser")
+                            .small()
+                            .color(th::FG_DIM),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .small_button(format!("✕ {}", g.title))
-                            .on_hover_text("Delete group; tabs stay open and return to path groups")
+                            .small_button(RichText::new("Quit").color(th::FG_DIM))
                             .clicked()
                         {
-                            self.delete_group(&g.id);
+                            self.request_quit(ctx);
                         }
-                    }
+                        if ui.small_button("Refresh").clicked() {
+                            self.apply_snapshot();
+                        }
+                        let tools_label = if self.show_tools {
+                            "Tools ▾"
+                        } else {
+                            "Tools ▸"
+                        };
+                        if ui
+                            .small_button(tools_label)
+                            .on_hover_text("Groups & launch")
+                            .clicked()
+                        {
+                            self.show_tools = !self.show_tools;
+                        }
+                    });
                 });
-            }
-            // FS13 launch
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("Launch")
-                        .small()
-                        .color(Color32::from_rgb(158, 206, 106)),
-                );
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.launch_cwd)
-                        .desired_width(200.0)
-                        .hint_text("cwd for new tab")
-                        .id_source("termorg_launch_cwd"),
-                );
-                if ui
-                    .small_button("⇤")
-                    .on_hover_text("Use selected session cwd")
-                    .clicked()
-                {
-                    self.fill_launch_cwd_from_selection();
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Group").small());
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.launch_group)
-                        .desired_width(100.0)
-                        .hint_text("(optional)")
-                        .id_source("termorg_launch_group"),
-                );
-                if !self.manual_groups.is_empty() {
-                    ui.menu_button("▾", |ui| {
-                        let groups = self.manual_groups.clone();
-                        for g in groups {
-                            if ui.button(&g.title).clicked() {
-                                self.launch_group = g.title.clone();
-                                ui.close_menu();
-                            }
-                        }
-                        if ui.button("(none)").clicked() {
-                            self.launch_group.clear();
-                            ui.close_menu();
-                        }
-                    });
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                if ui.small_button("shell").clicked() {
-                    self.launch_kind(LaunchKind::Shell);
-                }
-                if ui
-                    .small_button(RichText::new("Claude").color(Color32::from_rgb(247, 118, 142)))
-                    .clicked()
-                {
-                    self.launch_kind(LaunchKind::Claude);
-                }
-                if ui
-                    .small_button(RichText::new("Grok").color(Color32::from_rgb(122, 162, 247)))
-                    .clicked()
-                {
-                    self.launch_kind(LaunchKind::Grok);
-                }
-                if ui
-                    .small_button(RichText::new("Kilo").color(Color32::from_rgb(187, 154, 247)))
-                    .clicked()
-                {
-                    self.launch_kind(LaunchKind::Kilo);
-                }
-                if ui
-                    .small_button(RichText::new("Codex").color(Color32::from_rgb(158, 206, 106)))
-                    .clicked()
-                {
-                    self.launch_kind(LaunchKind::Codex);
-                }
-            });
-            ui.separator();
-        });
 
-        egui::TopBottomPanel::bottom("bottom").show(ctx, |ui| {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(
-                    "Click/Enter = focus · / filter · Enter in filter focuses match · Esc clear · n/p queue · ↑/↓",
-                )
-                .small()
-                .color(Color32::from_rgb(86, 95, 137)),
-            );
-            ui.add_space(4.0);
-        });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(err) = &self.error {
-                ui.add_space(12.0);
-                egui::Frame::new()
-                    .fill(Color32::from_rgb(48, 30, 36))
-                    .corner_radius(CornerRadius::same(6))
-                    .inner_margin(12.0)
-                    .show(ui, |ui| {
-                        ui.label(
-                            RichText::new("Cannot see terminals")
-                                .strong()
-                                .color(Color32::from_rgb(247, 118, 142)),
-                        );
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(err)
-                                .small()
-                                .color(Color32::from_rgb(192, 160, 170)),
-                        );
-                    });
-                return;
-            }
-
-            // ── Path hints (FS15) ────────────────────────────────────────
-            let mut hint_accept: Option<String> = None;
-            let mut hint_dismiss: Option<String> = None;
-            if !self.path_suggestions.is_empty() {
-                ui.label(
-                    RichText::new(format!(
-                        "✦  Path suggestions   ·  {}",
-                        self.path_suggestions.len()
-                    ))
-                    .strong()
-                    .size(14.0)
-                    .color(Color32::from_rgb(187, 154, 247)),
-                );
-                ui.label(
-                    RichText::new("Accept to assign · Dismiss to hide this path")
-                        .small()
-                        .color(Color32::from_rgb(86, 95, 137)),
-                );
-                let sug = self.path_suggestions.clone();
-                for s in sug {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(format!(
-                                "{} → ◆ {}  ({})",
-                                s.path_title, s.group_title, s.session_id
-                            ))
-                            .small()
-                            .color(Color32::from_rgb(192, 202, 245)),
-                        );
-                        if ui.small_button("Accept").clicked() {
-                            hint_accept = Some(s.session_id.clone());
-                        }
-                        if ui.small_button("Dismiss").clicked() {
-                            hint_dismiss = Some(s.path_key.clone());
-                        }
-                    });
-                }
+                // Stats chips
                 ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(4.0);
-            }
-            if let Some(id) = hint_accept {
-                self.accept_hint(&id);
-            }
-            if let Some(key) = hint_dismiss {
-                self.dismiss_hint(&key);
-            }
-
-            // ── Action queue (FS9) ──────────────────────────────────────
-            let mut queue_click: Option<usize> = None;
-            ui.label(
-                RichText::new(format!(
-                    "◎  Action queue   ·  {} item{}",
-                    self.action_queue.len(),
-                    if self.action_queue.len() == 1 {
-                        ""
-                    } else {
-                        "s"
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    th::stat_chip(ui, "sessions", &self.session_count.to_string(), th::FG);
+                    if n_kitty > 0 {
+                        th::stat_chip(ui, "kitty", &n_kitty.to_string(), th::PROVIDER_KITTY);
                     }
-                ))
-                .strong()
-                .size(14.0)
-                .color(Color32::from_rgb(247, 118, 142)),
-            );
-            if self.action_queue.is_empty() {
-                ui.label(
-                    RichText::new("Nothing needs you right now")
-                        .small()
-                        .color(Color32::from_rgb(86, 95, 137)),
-                );
-            } else {
-                let qsel = self.queue_sel;
-                let pri_map: std::collections::HashMap<String, Priority> = {
-                    let st = UserState::load().unwrap_or_default();
-                    self.action_queue
-                        .iter()
-                        .map(|s| (s.id.clone(), st.priority_for(s)))
-                        .collect()
-                };
-                for (qi, s) in self.action_queue.iter().enumerate() {
-                    let pri = pri_map.get(&s.id).copied().unwrap_or(Priority::Normal);
-                    let sel = qsel == Some(qi);
-                    let (rect, resp) = ui
-                        .allocate_exact_size(Vec2::new(ui.available_width(), 32.0), Sense::click());
-                    let fill = if sel {
-                        Color32::from_rgb(55, 40, 48)
-                    } else if resp.hovered() {
-                        Color32::from_rgb(42, 32, 38)
-                    } else {
-                        Color32::from_rgb(34, 28, 32)
-                    };
-                    ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
-                    let mut child = ui.new_child(
-                        egui::UiBuilder::new()
-                            .max_rect(rect.shrink2(Vec2::new(10.0, 4.0)))
-                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                    );
-                    let star = if pri == Priority::Important {
-                        "★ "
-                    } else {
-                        ""
-                    };
-                    child.label(
-                        RichText::new(format!("{:>2}. {star}", qi + 1))
-                            .color(Color32::from_rgb(224, 175, 104)),
-                    );
-                    let (ar, ag, ab) = s.agent.rgb();
-                    child.colored_label(
-                        Color32::from_rgb(ar, ag, ab),
-                        RichText::new(format!(" {} ", s.agent.label()))
-                            .small()
-                            .strong(),
-                    );
-                    let (tr, tg, tb) = s.attention.rgb();
-                    child.colored_label(
-                        Color32::from_rgb(tr, tg, tb),
-                        RichText::new(format!(" {} ", s.attention.label()))
-                            .small()
-                            .strong(),
-                    );
-                    child.label(
-                        RichText::new(format!(" {}  {}", s.id, s.title.replace('\n', " ")))
-                            .small()
-                            .color(Color32::from_rgb(192, 202, 245)),
-                    );
-                    ui.advance_cursor_after_rect(rect);
-                    ui.add_space(3.0);
-                    if resp.clicked() {
-                        queue_click = Some(qi);
+                    if n_tmux > 0 {
+                        th::stat_chip(ui, "tmux", &n_tmux.to_string(), th::PROVIDER_TMUX);
                     }
-                }
-            }
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(4.0);
-
-            if let Some(qi) = queue_click {
-                self.queue_focus_index(qi);
-            }
-
-            if self.sections.is_empty() && self.action_queue.is_empty() {
-                ui.add_space(24.0);
-                ui.vertical_centered(|ui| {
-                    let msg = if !self.filter_query.trim().is_empty() {
-                        "No sessions match filter"
-                    } else {
-                        "No sessions"
-                    };
-                    ui.label(RichText::new(msg).color(Color32::from_rgb(86, 95, 137)));
+                    th::stat_chip(
+                        ui,
+                        "queue",
+                        &n_queue.to_string(),
+                        if n_queue > 0 { th::PINK } else { th::FG_DIM },
+                    );
+                    th::stat_chip(ui, "groups", &n_manual.to_string(), th::AMBER);
+                    if n_hints > 0 {
+                        th::stat_chip(ui, "hints", &n_hints.to_string(), th::PURPLE);
+                    }
                 });
-                return;
-            }
 
-            let mut clicked: Option<ProviderSession> = None;
-            let mut assign_to: Option<(ProviderSession, String)> = None;
-            let mut unassign_s: Option<ProviderSession> = None;
-            let mut set_pri: Option<(ProviderSession, Priority)> = None;
-            let selected = self.selected;
-            let groups_for_menu = self.manual_groups.clone();
-            let pri_lookup: std::collections::HashMap<String, Priority> = {
-                let st = UserState::load().unwrap_or_default();
-                let mut m = std::collections::HashMap::new();
-                for sec in &self.sections {
-                    let members = match sec {
-                        DisplaySection::Manual { sessions, .. }
-                        | DisplaySection::Auto { sessions, .. } => sessions,
-                    };
-                    for s in members {
-                        m.insert(s.id.clone(), st.priority_for(s));
-                    }
+                // Status line
+                if !self.status.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(&self.status).small().color(th::FG_DIM));
                 }
-                m
-            };
 
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for (si, sec) in self.sections.iter().enumerate() {
-                        ui.add_space(8.0);
-                        match sec {
-                            DisplaySection::Manual { group, sessions } => {
-                                ui.label(
-                                    RichText::new(format!(
-                                        "◆  {}   ·  {} tab{}",
-                                        group.title,
-                                        sessions.len(),
-                                        if sessions.len() == 1 { "" } else { "s" }
-                                    ))
-                                    .strong()
-                                    .size(14.0)
-                                    .color(Color32::from_rgb(224, 175, 104)),
-                                );
-                                ui.label(
-                                    RichText::new("manual group")
-                                        .small()
-                                        .color(Color32::from_rgb(86, 95, 137)),
-                                );
-                                for (mi, s) in sessions.iter().enumerate() {
-                                    let is_sel = selected == Some((si, mi));
-                                    let pri =
-                                        pri_lookup.get(&s.id).copied().unwrap_or(Priority::Normal);
-                                    let action = rows::session_row(
-                                        ui,
-                                        s,
-                                        is_sel,
-                                        true,
-                                        pri,
-                                        &groups_for_menu,
-                                    );
-                                    match action {
-                                        RowAction::Focus => clicked = Some(s.clone()),
-                                        RowAction::Assign(gid) => {
-                                            assign_to = Some((s.clone(), gid));
-                                        }
-                                        RowAction::Unassign => unassign_s = Some(s.clone()),
-                                        RowAction::SetPriority(p) => {
-                                            set_pri = Some((s.clone(), p));
-                                        }
-                                        RowAction::None => {}
-                                    }
+                // Filter — always visible
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("⌕").color(th::BLUE));
+                    let te = egui::TextEdit::singleline(&mut self.filter_query)
+                        .desired_width(ui.available_width() - 48.0)
+                        .hint_text("Filter title · path · agent · provider · Enter focuses")
+                        .id_source("termorg_filter");
+                    let resp = ui.add(te);
+                    if self.focus_filter {
+                        resp.request_focus();
+                        self.focus_filter = false;
+                    }
+                    if resp.changed() {
+                        self.rebuild_views();
+                    }
+                    if resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        self.focus_current_or_first();
+                    }
+                    if !self.filter_query.is_empty()
+                        && ui.small_button("✕").on_hover_text("Clear (Esc)").clicked()
+                    {
+                        self.filter_query.clear();
+                        self.rebuild_views();
+                    }
+                });
+
+                // Collapsible tools: groups + launch
+                if self.show_tools {
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Groups").small().strong().color(th::AMBER));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.new_group_name)
+                                .desired_width(160.0)
+                                .hint_text("New group name"),
+                        );
+                        if ui.button(RichText::new("Create").small()).clicked() {
+                            self.create_group_from_field();
+                        }
+                    });
+                    if !self.manual_groups.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            let groups = self.manual_groups.clone();
+                            for g in groups {
+                                if ui
+                                    .small_button(format!("✕ {}", g.title))
+                                    .on_hover_text("Delete group (tabs unassigned)")
+                                    .clicked()
+                                {
+                                    self.delete_group(&g.id);
                                 }
                             }
-                            DisplaySection::Auto {
-                                title,
-                                path_hint,
-                                sessions,
-                            } => {
-                                ui.label(
-                                    RichText::new(format!(
-                                        "▶  {}   ·  {} tab{}",
-                                        title,
-                                        sessions.len(),
-                                        if sessions.len() == 1 { "" } else { "s" }
-                                    ))
-                                    .strong()
-                                    .size(14.0)
-                                    .color(Color32::from_rgb(122, 162, 247)),
-                                );
-                                if path_hint != title && !path_hint.is_empty() {
-                                    ui.label(
-                                        RichText::new(rows::collapse_home(path_hint))
-                                            .small()
-                                            .color(Color32::from_rgb(86, 95, 137)),
-                                    );
+                        });
+                    }
+
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Launch").small().strong().color(th::GREEN));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.launch_cwd)
+                                .desired_width(200.0)
+                                .hint_text("cwd")
+                                .id_source("termorg_launch_cwd"),
+                        );
+                        if ui
+                            .small_button("⇤")
+                            .on_hover_text("Use selected cwd")
+                            .clicked()
+                        {
+                            self.fill_launch_cwd_from_selection();
+                        }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.launch_group)
+                                .desired_width(90.0)
+                                .hint_text("group")
+                                .id_source("termorg_launch_group"),
+                        );
+                        if !self.manual_groups.is_empty() {
+                            ui.menu_button("▾", |ui| {
+                                let groups = self.manual_groups.clone();
+                                for g in groups {
+                                    if ui.button(&g.title).clicked() {
+                                        self.launch_group = g.title.clone();
+                                        ui.close_menu();
+                                    }
                                 }
-                                for (mi, s) in sessions.iter().enumerate() {
-                                    let is_sel = selected == Some((si, mi));
-                                    let pri =
-                                        pri_lookup.get(&s.id).copied().unwrap_or(Priority::Normal);
-                                    let action = rows::session_row(
+                                if ui.button("(none)").clicked() {
+                                    self.launch_group.clear();
+                                    ui.close_menu();
+                                }
+                            });
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if ui.small_button("shell").clicked() {
+                            self.launch_kind(LaunchKind::Shell);
+                        }
+                        if ui
+                            .small_button(RichText::new("Claude").color(th::PINK))
+                            .clicked()
+                        {
+                            self.launch_kind(LaunchKind::Claude);
+                        }
+                        if ui
+                            .small_button(RichText::new("Grok").color(th::BLUE))
+                            .clicked()
+                        {
+                            self.launch_kind(LaunchKind::Grok);
+                        }
+                        if ui
+                            .small_button(RichText::new("Kilo").color(th::PURPLE))
+                            .clicked()
+                        {
+                            self.launch_kind(LaunchKind::Kilo);
+                        }
+                        if ui
+                            .small_button(RichText::new("Codex").color(th::GREEN))
+                            .clicked()
+                        {
+                            self.launch_kind(LaunchKind::Codex);
+                        }
+                    });
+                }
+            });
+
+        egui::TopBottomPanel::bottom("bottom")
+            .frame(
+                egui::Frame::new()
+                    .fill(th::BG_ELEVATED)
+                    .inner_margin(egui::Margin::symmetric(12, 6))
+                    .stroke(egui::Stroke::new(1.0, Color32::from_rgb(36, 40, 56))),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    let keys = [
+                        ("↵", "focus"),
+                        ("/", "filter"),
+                        ("n/p", "queue"),
+                        ("↑↓", "select"),
+                        ("Esc", "clear"),
+                    ];
+                    for (k, v) in keys {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 3.0;
+                            th::pill(ui, k, th::BLUE, th::tinted_bg(th::BLUE, 36));
+                            ui.label(RichText::new(v).small().color(th::FG_DIM));
+                        });
+                    }
+                });
+            });
+
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(th::BG)
+                    .inner_margin(egui::Margin::symmetric(12, 10)),
+            )
+            .show(ctx, |ui| {
+                if let Some(err) = &self.error {
+                    ui.add_space(12.0);
+                    egui::Frame::new()
+                        .fill(Color32::from_rgb(48, 30, 36))
+                        .corner_radius(CornerRadius::same(8))
+                        .inner_margin(14.0)
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("Cannot see terminals")
+                                    .strong()
+                                    .color(th::PINK),
+                            );
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(err)
+                                    .small()
+                                    .color(Color32::from_rgb(192, 160, 170)),
+                            );
+                        });
+                    return;
+                }
+
+                // ── Path hints (FS15) ────────────────────────────────────────
+                let mut hint_accept: Option<String> = None;
+                let mut hint_dismiss: Option<String> = None;
+                if !self.path_suggestions.is_empty() {
+                    th::section_header(
+                        ui,
+                        "✦",
+                        "Path suggestions",
+                        &format!("{}", self.path_suggestions.len()),
+                        th::PURPLE,
+                    );
+                    ui.label(
+                        RichText::new("Accept to assign · Dismiss to hide this path")
+                            .small()
+                            .color(th::FG_DIM),
+                    );
+                    let sug = self.path_suggestions.clone();
+                    for s in sug {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{} → ◆ {}", s.path_title, s.group_title))
+                                    .small()
+                                    .color(th::FG),
+                            );
+                            if ui.small_button("Accept").clicked() {
+                                hint_accept = Some(s.session_id.clone());
+                            }
+                            if ui.small_button("Dismiss").clicked() {
+                                hint_dismiss = Some(s.path_key.clone());
+                            }
+                        });
+                    }
+                    ui.add_space(8.0);
+                }
+                if let Some(id) = hint_accept {
+                    self.accept_hint(&id);
+                }
+                if let Some(key) = hint_dismiss {
+                    self.dismiss_hint(&key);
+                }
+
+                // ── Action queue hero (FS9) ─────────────────────────────────
+                let mut queue_click: Option<usize> = None;
+                let queue_meta = if self.action_queue.is_empty() {
+                    "clear".into()
+                } else {
+                    format!(
+                        "{} item{}",
+                        self.action_queue.len(),
+                        if self.action_queue.len() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        }
+                    )
+                };
+                th::section_header(ui, "◎", "Needs you", &queue_meta, th::PINK);
+
+                if self.action_queue.is_empty() {
+                    ui.add_space(2.0);
+                    egui::Frame::new()
+                        .fill(th::BG_ROW)
+                        .corner_radius(CornerRadius::same(7))
+                        .inner_margin(egui::Margin::symmetric(12, 10))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("Nothing needs you right now").color(th::FG_SOFT),
+                            );
+                            ui.label(
+                                RichText::new(
+                                    "Agent hooks drive this queue · n/p to cycle when busy",
+                                )
+                                .small()
+                                .color(th::FG_DIM),
+                            );
+                        });
+                } else {
+                    let qsel = self.queue_sel;
+                    let pri_map: std::collections::HashMap<String, Priority> = {
+                        let st = UserState::load().unwrap_or_default();
+                        self.action_queue
+                            .iter()
+                            .map(|s| (s.id.clone(), st.priority_for(s)))
+                            .collect()
+                    };
+                    for (qi, s) in self.action_queue.iter().enumerate() {
+                        let pri = pri_map.get(&s.id).copied().unwrap_or(Priority::Normal);
+                        if rows::queue_row(ui, qi, s, qsel == Some(qi), pri, pulse) {
+                            queue_click = Some(qi);
+                        }
+                    }
+                }
+                ui.add_space(10.0);
+
+                if let Some(qi) = queue_click {
+                    self.queue_focus_index(qi);
+                }
+
+                if self.sections.is_empty() && self.action_queue.is_empty() {
+                    let (title, hint) = if !self.filter_query.trim().is_empty() {
+                        (
+                            "No sessions match filter",
+                            "Esc clears · try agent name or path fragment",
+                        )
+                    } else {
+                        (
+                            "No sessions",
+                            "Start Kitty with remote control or a tmux session",
+                        )
+                    };
+                    th::empty_state(ui, title, hint);
+                    return;
+                }
+
+                th::section_header(
+                    ui,
+                    "☰",
+                    "Sessions",
+                    &format!("{}", self.session_count),
+                    th::BLUE,
+                );
+                ui.add_space(2.0);
+
+                let mut clicked: Option<ProviderSession> = None;
+                let mut assign_to: Option<(ProviderSession, String)> = None;
+                let mut unassign_s: Option<ProviderSession> = None;
+                let mut set_pri: Option<(ProviderSession, Priority)> = None;
+                let selected = self.selected;
+                let groups_for_menu = self.manual_groups.clone();
+                let pri_lookup: std::collections::HashMap<String, Priority> = {
+                    let st = UserState::load().unwrap_or_default();
+                    let mut m = std::collections::HashMap::new();
+                    for sec in &self.sections {
+                        let members = match sec {
+                            DisplaySection::Manual { sessions, .. }
+                            | DisplaySection::Auto { sessions, .. } => sessions,
+                        };
+                        for s in members {
+                            m.insert(s.id.clone(), st.priority_for(s));
+                        }
+                    }
+                    m
+                };
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for (si, sec) in self.sections.iter().enumerate() {
+                            ui.add_space(6.0);
+                            match sec {
+                                DisplaySection::Manual { group, sessions } => {
+                                    th::section_header(
                                         ui,
-                                        s,
-                                        is_sel,
-                                        false,
-                                        pri,
-                                        &groups_for_menu,
+                                        "◆",
+                                        &group.title,
+                                        &format!(
+                                            "{} · manual",
+                                            if sessions.len() == 1 {
+                                                "1 tab".into()
+                                            } else {
+                                                format!("{} tabs", sessions.len())
+                                            }
+                                        ),
+                                        th::AMBER,
                                     );
-                                    match action {
-                                        RowAction::Focus => clicked = Some(s.clone()),
-                                        RowAction::Assign(gid) => {
-                                            assign_to = Some((s.clone(), gid));
+                                    for (mi, s) in sessions.iter().enumerate() {
+                                        let is_sel = selected == Some((si, mi));
+                                        let pri = pri_lookup
+                                            .get(&s.id)
+                                            .copied()
+                                            .unwrap_or(Priority::Normal);
+                                        let action = rows::session_row(
+                                            ui,
+                                            s,
+                                            is_sel,
+                                            true,
+                                            pri,
+                                            &groups_for_menu,
+                                            pulse,
+                                        );
+                                        match action {
+                                            RowAction::Focus => clicked = Some(s.clone()),
+                                            RowAction::Assign(gid) => {
+                                                assign_to = Some((s.clone(), gid));
+                                            }
+                                            RowAction::Unassign => unassign_s = Some(s.clone()),
+                                            RowAction::SetPriority(p) => {
+                                                set_pri = Some((s.clone(), p));
+                                            }
+                                            RowAction::None => {}
                                         }
-                                        RowAction::Unassign => unassign_s = Some(s.clone()),
-                                        RowAction::SetPriority(p) => {
-                                            set_pri = Some((s.clone(), p));
+                                    }
+                                }
+                                DisplaySection::Auto {
+                                    title,
+                                    path_hint,
+                                    sessions,
+                                } => {
+                                    th::section_header(
+                                        ui,
+                                        "▶",
+                                        title,
+                                        &format!(
+                                            "{}",
+                                            if sessions.len() == 1 {
+                                                "1 tab".into()
+                                            } else {
+                                                format!("{} tabs", sessions.len())
+                                            }
+                                        ),
+                                        th::BLUE,
+                                    );
+                                    if path_hint != title && !path_hint.is_empty() {
+                                        ui.label(
+                                            RichText::new(rows::collapse_home(path_hint))
+                                                .small()
+                                                .color(th::FG_DIM),
+                                        );
+                                    }
+                                    for (mi, s) in sessions.iter().enumerate() {
+                                        let is_sel = selected == Some((si, mi));
+                                        let pri = pri_lookup
+                                            .get(&s.id)
+                                            .copied()
+                                            .unwrap_or(Priority::Normal);
+                                        let action = rows::session_row(
+                                            ui,
+                                            s,
+                                            is_sel,
+                                            false,
+                                            pri,
+                                            &groups_for_menu,
+                                            pulse,
+                                        );
+                                        match action {
+                                            RowAction::Focus => clicked = Some(s.clone()),
+                                            RowAction::Assign(gid) => {
+                                                assign_to = Some((s.clone(), gid));
+                                            }
+                                            RowAction::Unassign => unassign_s = Some(s.clone()),
+                                            RowAction::SetPriority(p) => {
+                                                set_pri = Some((s.clone(), p));
+                                            }
+                                            RowAction::None => {}
                                         }
-                                        RowAction::None => {}
                                     }
                                 }
                             }
                         }
-                    }
-                    ui.add_space(12.0);
-                });
+                        ui.add_space(12.0);
+                    });
 
-            fn select_session(panel: &mut PanelState, s: &ProviderSession) {
-                for (si, sec) in panel.sections.iter().enumerate() {
-                    let members = match sec {
-                        DisplaySection::Manual { sessions, .. }
-                        | DisplaySection::Auto { sessions, .. } => sessions,
-                    };
-                    if let Some(mi) = members.iter().position(|m| m.id == s.id) {
-                        panel.selected = Some((si, mi));
-                        break;
+                fn select_session(panel: &mut PanelState, s: &ProviderSession) {
+                    for (si, sec) in panel.sections.iter().enumerate() {
+                        let members = match sec {
+                            DisplaySection::Manual { sessions, .. }
+                            | DisplaySection::Auto { sessions, .. } => sessions,
+                        };
+                        if let Some(mi) = members.iter().position(|m| m.id == s.id) {
+                            panel.selected = Some((si, mi));
+                            break;
+                        }
                     }
                 }
-            }
 
-            if let Some(s) = clicked {
-                select_session(self, &s);
-                self.focus_session(&s);
-            }
-            if let Some((s, gid)) = assign_to {
-                select_session(self, &s);
-                self.assign_selected(&gid);
-            }
-            if let Some(s) = unassign_s {
-                select_session(self, &s);
-                self.unassign_selected();
-            }
-            if let Some((s, p)) = set_pri {
-                select_session(self, &s);
-                self.set_priority_selected(p);
-            }
-        });
+                if let Some(s) = clicked {
+                    select_session(self, &s);
+                    self.focus_session(&s);
+                }
+                if let Some((s, gid)) = assign_to {
+                    select_session(self, &s);
+                    self.assign_selected(&gid);
+                }
+                if let Some(s) = unassign_s {
+                    select_session(self, &s);
+                    self.unassign_selected();
+                }
+                if let Some((s, p)) = set_pri {
+                    select_session(self, &s);
+                    self.set_priority_selected(p);
+                }
+            });
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
