@@ -274,6 +274,7 @@ mod tests {
             match_rule: SessionMatch::ProviderId { id: "t1".into() },
             manual_group_id: Some("g1".into()),
             priority: Priority::Normal,
+            explicit_priority: false,
             cwd: None,
             title: None,
             updated_at: 0,

@@ -91,6 +91,10 @@ pub struct SessionPref {
     /// User priority (FS8). Default normal.
     #[serde(default)]
     pub priority: Priority,
+    /// True when the user explicitly set priority (including Normal).
+    /// Keeps a Normal-only pref so it can shadow sticky path mute across reloads.
+    #[serde(default)]
+    pub explicit_priority: bool,
     /// For rebind after restart when the tab id changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
@@ -100,8 +104,11 @@ pub struct SessionPref {
 }
 
 impl SessionPref {
+    /// Pref rows worth keeping on disk / after rebind.
     pub(crate) fn is_meaningful(&self) -> bool {
-        self.manual_group_id.is_some() || self.priority != Priority::Normal
+        self.manual_group_id.is_some()
+            || self.priority != Priority::Normal
+            || self.explicit_priority
     }
 }
 
@@ -447,22 +454,11 @@ impl UserState {
 
     pub fn set_priority(&mut self, session: &ProviderSession, priority: Priority) {
         // Always write a per-tab pref so Normal can override sticky path mute.
+        // `explicit_priority` keeps Normal-only rows through load/rebind.
         self.touch_pref(session, |p| {
             p.priority = priority;
+            p.explicit_priority = true;
         });
-        if priority == Priority::Normal {
-            let path_mute = self.path_sticky_mute(session);
-            let mut drop = false;
-            if let Some(p) = self.pref_for(session) {
-                // Keep empty Normal pref only when it must shadow sticky mute.
-                if !p.is_meaningful() && !path_mute {
-                    drop = true;
-                }
-            }
-            if drop {
-                self.remove_pref(session);
-            }
-        }
     }
 
     fn path_sticky_mute(&self, session: &ProviderSession) -> bool {
@@ -507,6 +503,7 @@ impl UserState {
                 },
                 manual_group_id: None,
                 priority: Priority::Normal,
+                explicit_priority: false,
                 cwd: session.cwd.clone(),
                 title: Some(session.title.clone()),
                 updated_at: now,
@@ -518,9 +515,9 @@ impl UserState {
             p.updated_at = now;
             f(p);
         }
-        // Drop empty prefs, but keep a Normal-only pref when it shadows sticky mute.
+        // Drop empty prefs (Normal without group and without explicit_priority).
         if let Some(p) = self.pref_for(session) {
-            if !p.is_meaningful() && !self.path_sticky_mute(session) {
+            if !p.is_meaningful() {
                 self.remove_pref(session);
             }
         }
@@ -825,6 +822,61 @@ mod tests {
         // Explicit normal pref wins over sticky mute.
         state.set_priority(&s, Priority::Normal);
         assert_eq!(state.priority_for(&s), Priority::Normal);
+    }
+
+    /// Skeptic: Normal override of sticky mute must survive save → load → rebind.
+    #[test]
+    fn sticky_mute_normal_override_survives_save_load_rebind() {
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _g = LOCK.lock().unwrap();
+
+        let dir = std::env::temp_dir().join(format!("termorg-sticky-mute-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("TERMORG_CONFIG_DIR", &dir);
+
+        let mut state = UserState::default();
+        let s = sess("kitty:w1:t1", "/tmp/sticky-mute-roundtrip", "zsh");
+        let (key, _) = crate::hints::path_key_for_session(&s).expect("path key");
+        state.set_path_mute(&key, true).unwrap();
+        assert_eq!(state.priority_for(&s), Priority::Muted);
+        state.set_priority(&s, Priority::Normal);
+        assert_eq!(state.priority_for(&s), Priority::Normal);
+        // Pref must be marked meaningful via explicit_priority.
+        assert!(
+            state
+                .session_prefs
+                .iter()
+                .any(|p| p.explicit_priority && p.priority == Priority::Normal),
+            "expected explicit Normal pref: {:?}",
+            state.session_prefs
+        );
+        state.save().unwrap();
+
+        // Simulate new process: load drops non-meaningful prefs.
+        let loaded = UserState::load().unwrap();
+        assert_eq!(
+            loaded.priority_for(&s),
+            Priority::Normal,
+            "after load, sticky mute must stay shadowed"
+        );
+
+        // rebind with same live id must not drop the override.
+        let mut loaded2 = loaded;
+        let _ = loaded2.rebind_stale_session_ids(std::slice::from_ref(&s));
+        assert_eq!(
+            loaded2.priority_for(&s),
+            Priority::Normal,
+            "after rebind, sticky mute must stay shadowed"
+        );
+
+        // load_and_rebind public path
+        let via = load_and_rebind(std::slice::from_ref(&s)).unwrap();
+        assert_eq!(via.priority_for(&s), Priority::Normal);
+
+        let _ = fs::remove_dir_all(&dir);
+        std::env::remove_var("TERMORG_CONFIG_DIR");
     }
 
     #[test]

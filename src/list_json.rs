@@ -182,6 +182,7 @@ mod tests {
             match_rule: SessionMatch::ProviderId { id: s.id.clone() },
             manual_group_id: Some("g1".into()),
             priority: Priority::Important,
+            explicit_priority: true,
             cwd: s.cwd.clone(),
             title: Some(s.title.clone()),
             updated_at: 1,

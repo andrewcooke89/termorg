@@ -193,6 +193,7 @@ mod tests {
             match_rule: SessionMatch::ProviderId { id: "x".into() },
             manual_group_id: Some("g1".into()),
             priority: crate::store::Priority::Normal,
+            explicit_priority: false,
             cwd: Some("/tmp/proj-b".into()),
             title: None,
             updated_at: 0,
