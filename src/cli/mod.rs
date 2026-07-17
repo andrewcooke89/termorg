@@ -46,7 +46,22 @@ pub fn run() {
     };
 
     let result = match cli.command {
-        Commands::List { json, flat, filter } => cmd_list(&provider, json, flat, filter.as_deref()),
+        Commands::List {
+            json,
+            flat,
+            filter,
+            hide_idle_shells,
+            show_idle_shells,
+        } => {
+            let hide = if show_idle_shells {
+                Some(false)
+            } else if hide_idle_shells {
+                Some(true)
+            } else {
+                None // honor env / default
+            };
+            cmd_list(&provider, json, flat, filter.as_deref(), hide)
+        }
         Commands::Watch {
             interval,
             no_notify,

@@ -1,0 +1,29 @@
+{
+  "_comment": "Codex hooks → termorg. Merge into ~/.codex/hooks.json (or equivalent). Trust via Codex /hooks. Command receives lifecycle JSON on stdin.",
+  "hooks": {
+    "Notification": [
+      { "type": "command", "command": "termorg hook" }
+    ],
+    "PermissionRequest": [
+      { "type": "command", "command": "termorg hook" }
+    ],
+    "Stop": [
+      { "type": "command", "command": "termorg hook" }
+    ],
+    "StopFailure": [
+      { "type": "command", "command": "termorg hook" }
+    ],
+    "PreToolUse": [
+      { "type": "command", "command": "termorg hook" }
+    ],
+    "PostToolUse": [
+      { "type": "command", "command": "termorg hook" }
+    ],
+    "UserPromptSubmit": [
+      { "type": "command", "command": "termorg hook" }
+    ],
+    "SessionEnd": [
+      { "type": "command", "command": "termorg hook" }
+    ]
+  }
+}

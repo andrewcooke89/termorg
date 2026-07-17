@@ -10,6 +10,7 @@ pub mod cli;
 pub mod error;
 pub mod filter;
 pub mod hints;
+pub mod list_json;
 pub mod notify;
 pub mod path_group;
 pub mod provider;

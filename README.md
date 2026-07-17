@@ -62,6 +62,8 @@ cargo install --path .
 termorg list                 # sessions (Kitty tabs + tmux windows when both available)
 termorg list --provider tmux
 termorg list -q claude       # filter
+termorg list --hide-idle-shells   # hide quiet shells (list only; queue unchanged)
+termorg list --json          # stable machine JSON (see docs below)
 termorg panel                # ops UI (toggle / single instance)
 termorg queue                # what needs you
 termorg next                 # focus next queue item
@@ -74,8 +76,26 @@ termorg launch --provider tmux -a shell -C ~/src/myproj
 |------------|---------|
 | `--provider kitty\|tmux\|all` | Backend selection (`TERMORG_PROVIDER`, default `all`) |
 | `--kitty-to unix:…` | Explicit Kitty remote-control socket |
+| `--hide-idle-shells` | Hide idle shell rows from list/panel noise |
+| `TERMORG_HIDE_IDLE_SHELLS=1` | Same as hide-idle by default |
+| `--show-idle-shells` | Force show idle shells even if env hides them |
 
 State lives in `~/.config/termorg/` (`state.json`, signals, notify/ambient config).
+
+### Sticky path rules
+
+Assigning a tab to a manual group **learns** that path (git root or collapsed path) and
+**auto-applies** the group to other unassigned tabs under the same path (sticky).
+Path mute is available via the library/API (`set_path_mute`); dismiss a path hint to
+suppress sticky apply for that key.
+
+### List JSON contract
+
+`termorg list --json` emits a JSON array of objects. Stable fields:
+
+`provider`, `id`, `title`, `cwd`, `agent`, `attention`, `priority`, `focused`,
+`is_focused` (alias), `group`, `group_id`, `manual_group_id` (alias),
+`section_kind`, `section_title`.
 
 ## Provider capability matrix
 

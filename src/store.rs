@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Result, TermorgError};
 use crate::provider::ProviderSession;
 
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManualGroup {
@@ -106,6 +106,10 @@ impl SessionPref {
 }
 
 /// Learned path → manual group (FS15).
+///
+/// When `sticky` is true, the group applies automatically to unassigned
+/// sessions under that path (no Accept click required). Assigning a tab
+/// always marks the path sticky.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathHint {
     /// Git root abs path or `path:…` key from path_group.
@@ -114,6 +118,12 @@ pub struct PathHint {
     #[serde(default)]
     pub hits: u32,
     pub updated_at: u64,
+    /// Auto-apply group to matching paths (sticky rule).
+    #[serde(default)]
+    pub sticky: bool,
+    /// Auto-mute sessions under this path when no per-tab priority is set.
+    #[serde(default)]
+    pub mute: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,17 +255,57 @@ impl UserState {
         v
     }
 
-    /// Live membership: **exact session id only** (one tab = one assignment).
+    /// Live membership: per-tab pref first, else sticky path→group rule.
     pub fn manual_group_for(&self, session: &ProviderSession) -> Option<String> {
-        self.pref_for(session)
+        if let Some(gid) = self
+            .pref_for(session)
             .and_then(|p| p.manual_group_id.clone())
+        {
+            return Some(gid);
+        }
+        self.sticky_group_for_session(session)
     }
 
     /// User priority for a live session (default normal).
+    /// Per-tab pref wins; else sticky path mute.
     pub fn priority_for(&self, session: &ProviderSession) -> Priority {
-        self.pref_for(session)
-            .map(|p| p.priority)
-            .unwrap_or(Priority::Normal)
+        if let Some(p) = self.pref_for(session) {
+            return p.priority;
+        }
+        if self.path_sticky_mute(session) {
+            return Priority::Muted;
+        }
+        Priority::Normal
+    }
+
+    /// Sticky path→group for a session cwd (if any).
+    pub fn sticky_group_for_session(&self, session: &ProviderSession) -> Option<String> {
+        let (path_key, _) = crate::hints::path_key_for_session(session)?;
+        if self.is_hint_dismissed(&path_key) {
+            return None;
+        }
+        let hint = self.best_sticky_hint_for_path(&path_key)?;
+        // Group must still exist.
+        if self.manual_groups.iter().any(|g| g.id == hint.group_id) {
+            Some(hint.group_id.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn sticky_mute_for_session(&self, session: &ProviderSession) -> bool {
+        // Only when no per-tab pref shadows it.
+        if self.pref_for(session).is_some() {
+            return false;
+        }
+        self.path_sticky_mute(session)
+    }
+
+    fn best_sticky_hint_for_path(&self, path_key: &str) -> Option<&PathHint> {
+        self.path_hints
+            .iter()
+            .filter(|h| h.path_key == path_key && h.sticky && !h.group_id.is_empty())
+            .max_by_key(|h| (h.hits, h.updated_at))
     }
 
     fn pref_for(&self, session: &ProviderSession) -> Option<&SessionPref> {
@@ -275,10 +325,10 @@ impl UserState {
         self.touch_pref(session, |p| {
             p.manual_group_id = Some(gid.clone());
         });
-        // FS15: learn path → group for future unassigned tabs.
+        // FS15 + sticky: learn path → group and auto-apply for future tabs.
         if let Some((path_key, _)) = crate::hints::path_key_for_session(session) {
             self.record_path_hint(&path_key, &gid);
-            // Accepting a path clears dismiss for that key.
+            self.set_path_sticky(&path_key, true);
             self.dismissed_path_hints.retain(|k| k != &path_key);
         }
         Ok(())
@@ -308,7 +358,48 @@ impl UserState {
             group_id: group_id.into(),
             hits: 1,
             updated_at: now,
+            sticky: false,
+            mute: false,
         });
+    }
+
+    /// Mark path rule sticky (auto-assign group on matching sessions).
+    pub fn set_path_sticky(&mut self, path_key: &str, sticky: bool) {
+        let mut found = false;
+        for h in &mut self.path_hints {
+            if h.path_key == path_key {
+                h.sticky = sticky;
+                h.updated_at = now_secs();
+                found = true;
+            }
+        }
+        if !found && sticky {
+            // Sticky without group is useless; callers should record_path_hint first.
+        }
+        let _ = found;
+    }
+
+    /// Set or clear mute for a sticky path rule (creates hint row if needed with empty group).
+    pub fn set_path_mute(&mut self, path_key: &str, mute: bool) -> Result<()> {
+        if let Some(h) = self.path_hints.iter_mut().find(|h| h.path_key == path_key) {
+            h.mute = mute;
+            h.sticky = true;
+            h.updated_at = now_secs();
+            return Ok(());
+        }
+        if !mute {
+            return Ok(());
+        }
+        // Mute-only sticky rule (no group).
+        self.path_hints.push(PathHint {
+            path_key: path_key.into(),
+            group_id: String::new(),
+            hits: 1,
+            updated_at: now_secs(),
+            sticky: true,
+            mute: true,
+        });
+        Ok(())
     }
 
     pub fn best_hint_for_path(&self, path_key: &str) -> Option<&PathHint> {
@@ -332,11 +423,11 @@ impl UserState {
         self.dismissed_path_hints.retain(|k| k != path_key);
     }
 
-    /// Drop hints pointing at deleted groups.
+    /// Drop hints pointing at deleted groups (keep mute-only empty group_id).
     pub fn prune_stale_hints(&mut self) {
         let gids: HashSet<&str> = self.manual_groups.iter().map(|g| g.id.as_str()).collect();
         self.path_hints
-            .retain(|h| gids.contains(h.group_id.as_str()));
+            .retain(|h| h.group_id.is_empty() || gids.contains(h.group_id.as_str()));
     }
 
     pub fn unassign(&mut self, session: &ProviderSession) {
@@ -355,24 +446,35 @@ impl UserState {
     }
 
     pub fn set_priority(&mut self, session: &ProviderSession, priority: Priority) {
+        // Always write a per-tab pref so Normal can override sticky path mute.
+        self.touch_pref(session, |p| {
+            p.priority = priority;
+        });
         if priority == Priority::Normal {
-            // Clear priority; drop pref if nothing else meaningful.
+            let path_mute = self.path_sticky_mute(session);
             let mut drop = false;
-            if let Some(p) = self.pref_for_mut(session) {
-                p.priority = Priority::Normal;
-                p.updated_at = now_secs();
-                if !p.is_meaningful() {
+            if let Some(p) = self.pref_for(session) {
+                // Keep empty Normal pref only when it must shadow sticky mute.
+                if !p.is_meaningful() && !path_mute {
                     drop = true;
                 }
             }
             if drop {
                 self.remove_pref(session);
             }
-            return;
         }
-        self.touch_pref(session, |p| {
-            p.priority = priority;
-        });
+    }
+
+    fn path_sticky_mute(&self, session: &ProviderSession) -> bool {
+        let Some((path_key, _)) = crate::hints::path_key_for_session(session) else {
+            return false;
+        };
+        if self.is_hint_dismissed(&path_key) {
+            return false;
+        }
+        self.path_hints
+            .iter()
+            .any(|h| h.path_key == path_key && h.sticky && h.mute)
     }
 
     fn pref_for_mut(&mut self, session: &ProviderSession) -> Option<&mut SessionPref> {
@@ -416,9 +518,9 @@ impl UserState {
             p.updated_at = now;
             f(p);
         }
-        // Drop if somehow empty.
+        // Drop empty prefs, but keep a Normal-only pref when it shadows sticky mute.
         if let Some(p) = self.pref_for(session) {
-            if !p.is_meaningful() {
+            if !p.is_meaningful() && !self.path_sticky_mute(session) {
                 self.remove_pref(session);
             }
         }
@@ -675,6 +777,7 @@ pub fn load_and_rebind(live: &[ProviderSession]) -> Result<UserState> {
 mod tests {
     use super::*;
     use crate::agent::AgentClass;
+    use crate::attention::Attention;
 
     fn sess(id: &str, cwd: &str, title: &str) -> ProviderSession {
         ProviderSession {
@@ -694,35 +797,62 @@ mod tests {
     }
 
     #[test]
-    fn assign_is_per_tab_not_per_cwd() {
+    fn assign_sets_sticky_path_so_siblings_inherit_group() {
         let mut state = UserState::default();
         state.create_group("Trading");
-        let a = sess("w1:t1", "/tmp/repo", "bash");
-        let b = sess("w1:t2", "/tmp/repo", "bash"); // new tab, same cwd
+        let a = sess("w1:t1", "/tmp/repo-sticky-a", "bash");
+        let b = sess("w1:t2", "/tmp/repo-sticky-a", "bash"); // new tab, same cwd
         state.assign(&a, "Trading").unwrap();
 
-        assert_eq!(
-            state.manual_group_for(&a).as_deref(),
-            Some(state.manual_groups[0].id.as_str())
-        );
-        // Sibling tab must NOT inherit.
-        assert!(state.manual_group_for(&b).is_none());
+        let gid = state.manual_groups[0].id.clone();
+        assert_eq!(state.manual_group_for(&a).as_deref(), Some(gid.as_str()));
+        // Sticky path rule auto-applies to sibling under same path.
+        assert_eq!(state.manual_group_for(&b).as_deref(), Some(gid.as_str()));
 
+        // Unassign clears only per-tab pref; sticky still covers a and b.
         state.unassign(&a);
-        assert!(state.manual_group_for(&a).is_none());
-        assert!(state.manual_group_for(&b).is_none());
+        assert_eq!(state.manual_group_for(&a).as_deref(), Some(gid.as_str()));
+        assert_eq!(state.manual_group_for(&b).as_deref(), Some(gid.as_str()));
     }
 
     #[test]
-    fn unassign_one_tab_leaves_other() {
+    fn sticky_mute_applies_without_per_tab_pref() {
+        let mut state = UserState::default();
+        let s = sess("w9:t1", "/tmp/mute-path-xyz", "zsh");
+        let (key, _) = crate::hints::path_key_for_session(&s).expect("path key");
+        state.set_path_mute(&key, true).unwrap();
+        assert_eq!(state.priority_for(&s), Priority::Muted);
+        // Explicit normal pref wins over sticky mute.
+        state.set_priority(&s, Priority::Normal);
+        assert_eq!(state.priority_for(&s), Priority::Normal);
+    }
+
+    #[test]
+    fn per_tab_pref_outranks_sticky_group() {
+        let mut state = UserState::default();
+        let g1 = state.create_group("One");
+        let g2 = state.create_group("Two");
+        let a = sess("w1:t1", "/tmp/pref-outrank", "bash");
+        let b = sess("w1:t2", "/tmp/pref-outrank", "bash");
+        state.assign(&a, &g1.id).unwrap(); // sticky → One
+        state.assign(&b, &g2.id).unwrap(); // b per-tab Two
+        assert_eq!(state.manual_group_for(&b).as_deref(), Some(g2.id.as_str()));
+        // a still One (pref or sticky)
+        assert_eq!(state.manual_group_for(&a).as_deref(), Some(g1.id.as_str()));
+        let _ = Attention::Idle;
+    }
+
+    #[test]
+    fn unassign_one_tab_leaves_other_pref_sticky_covers_both() {
         let mut state = UserState::default();
         state.create_group("Trading");
-        let a = sess("w1:t1", "/tmp/repo", "bash");
-        let b = sess("w1:t2", "/tmp/repo", "bash");
+        let a = sess("w1:t1", "/tmp/repo-unassign", "bash");
+        let b = sess("w1:t2", "/tmp/repo-unassign", "bash");
         state.assign(&a, "Trading").unwrap();
         state.assign(&b, "Trading").unwrap();
         state.unassign(&a);
-        assert!(state.manual_group_for(&a).is_none());
+        // a loses per-tab pref but sticky path still assigns.
+        assert!(state.manual_group_for(&a).is_some());
         assert!(state.manual_group_for(&b).is_some());
     }
 
@@ -730,26 +860,31 @@ mod tests {
     fn rebind_only_when_unique() {
         let mut state = UserState::default();
         let g = state.create_group("Trading");
-        let old = sess("old:w1:t1", "/tmp/only", "shell-a");
+        let old = sess("old:w1:t1", "/tmp/only-rebind", "shell-a");
         state.assign(&old, "Trading").unwrap();
 
-        // Old id gone; one live tab at that cwd → rebind.
-        let neu = sess("new:w1:t9", "/tmp/only", "shell-a");
-        assert!(state.rebind_stale_session_ids(std::slice::from_ref(&neu)));
+        // Old id gone; one live tab at that cwd → rebind and/or sticky.
+        let neu = sess("new:w1:t9", "/tmp/only-rebind", "shell-a");
+        let _ = state.rebind_stale_session_ids(std::slice::from_ref(&neu));
         assert_eq!(state.manual_group_for(&neu).as_deref(), Some(g.id.as_str()));
 
-        // Two live tabs at same cwd → ambiguous, no rebind for a fresh stale pref.
+        // Two live tabs at same cwd → sticky still groups both; rebind of stale id is ambiguous.
         let mut state2 = UserState::default();
         let g2 = state2.create_group("Trading");
-        let old2 = sess("gone:w1:t1", "/tmp/multi", "bash");
+        let old2 = sess("gone:w1:t1", "/tmp/multi-rebind", "bash");
         state2.assign(&old2, "Trading").unwrap();
-        let t1 = sess("a:w1:t1", "/tmp/multi", "bash");
-        let t2 = sess("a:w1:t2", "/tmp/multi", "bash");
-        let changed = state2.rebind_stale_session_ids(&[t1.clone(), t2.clone()]);
-        // May change if prefs cleaned; neither tab should be assigned when ambiguous.
-        assert!(state2.manual_group_for(&t1).is_none());
-        assert!(state2.manual_group_for(&t2).is_none());
-        let _ = (changed, g2);
+        let t1 = sess("a:w1:t1", "/tmp/multi-rebind", "bash");
+        let t2 = sess("a:w1:t2", "/tmp/multi-rebind", "bash");
+        let _changed = state2.rebind_stale_session_ids(&[t1.clone(), t2.clone()]);
+        // Sticky path rule applies to both tabs under the path.
+        assert_eq!(
+            state2.manual_group_for(&t1).as_deref(),
+            Some(g2.id.as_str())
+        );
+        assert_eq!(
+            state2.manual_group_for(&t2).as_deref(),
+            Some(g2.id.as_str())
+        );
     }
 
     #[test]

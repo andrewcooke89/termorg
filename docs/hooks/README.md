@@ -3,6 +3,8 @@
 `termorg hook` reads agent lifecycle JSON on stdin and records attention signals
 under `~/.config/termorg/signals.json`.
 
+Install `termorg` on `PATH` first (`cargo install --path .`).
+
 ## Match keys (auto from environment)
 
 | Env | Provider | Match quality |
@@ -12,15 +14,83 @@ under `~/.config/termorg/signals.json`.
 | `PWD` / payload `cwd` | both | fallback when host keys missing |
 
 Hooks work the same inside Kitty or tmux — termorg records whichever location
-keys are present in the environment when the hook runs.
+keys are present when the hook runs.
 
-Install `termorg` on `PATH`, then wire each agent:
+```bash
+termorg hook                 # stdin: agent lifecycle JSON
+termorg hook --list          # debug active signals
+termorg hook --state needs_you
+```
 
-| Agent | Config location |
-|-------|-----------------|
-| Claude Code | `~/.claude/settings.json` hooks |
-| Grok Build | `~/.grok/hooks/termorg.json` |
-| Codex | `~/.codex/hooks.json` (trust via `/hooks`) |
-| Kilo | plugin under config `plugin` array |
+## Event → attention
 
-See `examples/` for sample JSON.
+| Event (typical) | Attention |
+|-----------------|-----------|
+| Notification / PermissionRequest / Stop / StopFailure | needs you |
+| UserPromptSubmit / PreToolUse / PostToolUse | working |
+| SessionEnd | idle |
+| SessionStart / compact | ignored (no clobber) |
+
+## Copy-paste installs
+
+### Claude Code
+
+Merge into `~/.claude/settings.json` (or project settings). See full snippet:
+
+[`examples/claude-settings-hooks-snippet.json`](../../examples/claude-settings-hooks-snippet.json)
+
+Minimal pattern (all lifecycle hooks pipe to termorg):
+
+```json
+{
+  "hooks": {
+    "Notification": [{ "hooks": [{ "type": "command", "command": "termorg hook" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "termorg hook" }] }],
+    "PreToolUse": [{ "hooks": [{ "type": "command", "command": "termorg hook" }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "termorg hook" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "termorg hook" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "termorg hook" }] }]
+  }
+}
+```
+
+Claude runs the command with hook JSON on stdin. `KITTY_*` / `TMUX_PANE` come from the shell environment of that tab.
+
+### Grok Build
+
+Copy [`examples/grok-hooks-termorg.json`](../../examples/grok-hooks-termorg.json) to
+`~/.grok/hooks/termorg.json` (or merge into your hooks config). Ensure the command is `termorg hook`.
+
+### Codex
+
+Add a hooks entry in `~/.codex/hooks.json` (trust via `/hooks` in Codex):
+
+```json
+{
+  "hooks": {
+    "Notification": [{ "type": "command", "command": "termorg hook" }],
+    "PermissionRequest": [{ "type": "command", "command": "termorg hook" }],
+    "Stop": [{ "type": "command", "command": "termorg hook" }],
+    "PreToolUse": [{ "type": "command", "command": "termorg hook" }],
+    "UserPromptSubmit": [{ "type": "command", "command": "termorg hook" }],
+    "SessionEnd": [{ "type": "command", "command": "termorg hook" }]
+  }
+}
+```
+
+Exact Codex schema may wrap commands in arrays per version — if the file is rejected, mirror Claude’s nested `{ "hooks": [ { "type": "command", "command": "termorg hook" } ] }` shape from the Claude example.
+
+### Kilo
+
+Add a plugin / hook command that runs `termorg hook` with the lifecycle JSON on stdin on Notification, Stop, PreToolUse, and SessionEnd. Ensure the agent process inherits `TMUX_PANE` or Kitty remote-control env when running inside those hosts.
+
+## Verify
+
+```bash
+# Inside a tmux pane or Kitty tab running the agent:
+echo '{"hook_event_name":"Notification","session_id":"t","cwd":"'"$PWD"'"}' | termorg hook
+termorg hook --list
+termorg list -q needs
+```
+
+You should see `tmux=%…` or `kitty=…` on the signal and **needs you** on the matching session when the agent class is detected.

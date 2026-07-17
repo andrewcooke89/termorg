@@ -89,26 +89,139 @@ pub fn filter_sessions(
         .collect()
 }
 
+/// Whether an idle shell should be treated as list noise.
+///
+/// Keeps: agents, non-idle attention, focused tabs, anything non-shell.
+/// Drops: shell/unknown with Idle/Unknown attention when not focused.
+pub fn is_idle_shell_noise(session: &ProviderSession) -> bool {
+    if session.is_focused {
+        return false;
+    }
+    let shellish = matches!(session.agent, AgentClass::Shell | AgentClass::Unknown);
+    if !shellish {
+        return false;
+    }
+    matches!(session.attention, Attention::Idle | Attention::Unknown)
+}
+
+/// Drop idle shell noise when `hide` is true. Order preserved.
+/// Action-queue construction must use the **unfiltered** list.
+pub fn apply_noise_filter(
+    sessions: &[ProviderSession],
+    hide_idle_shells: bool,
+) -> Vec<ProviderSession> {
+    if !hide_idle_shells {
+        return sessions.to_vec();
+    }
+    sessions
+        .iter()
+        .filter(|s| !is_idle_shell_noise(s))
+        .cloned()
+        .collect()
+}
+
+/// Resolve hide-idle-shells from env (`TERMORG_HIDE_IDLE_SHELLS`) and optional CLI override.
+/// CLI `Some(true/false)` wins; else env 1/true/yes/on → true; default false.
+pub fn hide_idle_shells_enabled(cli_flag: Option<bool>) -> bool {
+    if let Some(v) = cli_flag {
+        return v;
+    }
+    match std::env::var("TERMORG_HIDE_IDLE_SHELLS") {
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::{ManualGroup, SessionMatch, SessionPref, UserState};
 
-    fn sess(id: &str, title: &str, cwd: Option<&str>, agent: AgentClass) -> ProviderSession {
+    fn sess_full(
+        id: &str,
+        title: &str,
+        cwd: Option<&str>,
+        agent: AgentClass,
+        attention: Attention,
+        focused: bool,
+    ) -> ProviderSession {
         ProviderSession {
             provider: "kitty".into(),
             id: id.into(),
             title: title.into(),
-            cwd: cwd.map(str::to_string),
-            is_focused: false,
+            cwd: cwd.map(|s| s.into()),
+            is_focused: focused,
             os_window_id: None,
             focus_endpoint: None,
             focus_tab_id: None,
             focus_window_id: None,
             focus_key: None,
             agent,
-            attention: Attention::Idle,
+            attention,
         }
+    }
+
+    fn sess(id: &str, title: &str, cwd: Option<&str>, agent: AgentClass) -> ProviderSession {
+        sess_full(id, title, cwd, agent, Attention::Idle, false)
+    }
+
+    #[test]
+    fn hide_idle_shells_keeps_agents_and_needs_you() {
+        let idle_shell = sess_full(
+            "1",
+            "zsh",
+            Some("/a"),
+            AgentClass::Shell,
+            Attention::Idle,
+            false,
+        );
+        let needs = sess_full(
+            "2",
+            "claude",
+            Some("/a"),
+            AgentClass::Claude,
+            Attention::NeedsYou,
+            false,
+        );
+        let focused_shell = sess_full(
+            "3",
+            "zsh",
+            Some("/b"),
+            AgentClass::Shell,
+            Attention::Idle,
+            true,
+        );
+        let working_shell = sess_full(
+            "4",
+            "zsh",
+            Some("/c"),
+            AgentClass::Shell,
+            Attention::Working,
+            false,
+        );
+        let all = vec![
+            idle_shell,
+            needs.clone(),
+            focused_shell.clone(),
+            working_shell.clone(),
+        ];
+        let filtered = apply_noise_filter(&all, true);
+        assert_eq!(filtered.len(), 3);
+        assert!(filtered.iter().any(|s| s.id == "2"));
+        assert!(filtered.iter().any(|s| s.id == "3"));
+        assert!(filtered.iter().any(|s| s.id == "4"));
+        assert!(!filtered.iter().any(|s| s.id == "1"));
+        // Off → all kept
+        assert_eq!(apply_noise_filter(&all, false).len(), 4);
+    }
+
+    #[test]
+    fn hide_idle_cli_override() {
+        assert!(hide_idle_shells_enabled(Some(true)));
+        assert!(!hide_idle_shells_enabled(Some(false)));
     }
 
     #[test]

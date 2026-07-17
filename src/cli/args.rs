@@ -32,6 +32,12 @@ pub(crate) enum Commands {
         /// Filter by title / path / agent / attention / group (FS10). Multi-word = AND.
         #[arg(long, short = 'q')]
         filter: Option<String>,
+        /// Hide idle shell sessions from the list (not the action queue).
+        #[arg(long)]
+        hide_idle_shells: bool,
+        /// Show idle shells even if TERMORG_HIDE_IDLE_SHELLS=1.
+        #[arg(long)]
+        show_idle_shells: bool,
     },
     Watch {
         #[arg(long, default_value_t = 1)]

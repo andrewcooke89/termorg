@@ -284,9 +284,12 @@ pub(crate) fn cmd_list(
     json: bool,
     flat: bool,
     filter_q: Option<&str>,
+    hide_idle_shells: Option<bool>,
 ) -> Result<()> {
     let sessions = provider.list_sessions()?;
     let state = load_and_rebind(&sessions).unwrap_or_default();
+    let hide = filter::hide_idle_shells_enabled(hide_idle_shells);
+    let sessions = filter::apply_noise_filter(&sessions, hide);
     let sessions = match filter_q {
         Some(q) if !q.trim().is_empty() => filter::filter_sessions(&sessions, &state, q),
         _ => sessions,
@@ -360,7 +363,7 @@ pub(crate) fn print_sections(
     for sec in &sections {
         match sec {
             DisplaySection::Manual { group, sessions } => {
-                if filtering && sessions.is_empty() {
+                if sessions.is_empty() {
                     continue;
                 }
                 n_manual += 1;
@@ -394,7 +397,7 @@ pub(crate) fn print_sections(
                 path_hint,
                 sessions,
             } => {
-                if filtering && sessions.is_empty() {
+                if sessions.is_empty() {
                     continue;
                 }
                 n_auto += 1;
@@ -458,51 +461,8 @@ fn collapse_hint(path: &str) -> String {
 }
 
 pub(crate) fn print_json(sessions: &[provider::ProviderSession], state: &UserState) {
-    let sections = build_display_sections(sessions.to_vec(), state);
-    println!("[");
-    let mut first = true;
-    for sec in sections {
-        let (kind, gtitle, gid, members): (&str, String, Option<String>, Vec<_>) = match sec {
-            DisplaySection::Manual { group, sessions } => {
-                ("manual", group.title, Some(group.id), sessions)
-            }
-            DisplaySection::Auto {
-                title, sessions, ..
-            } => ("auto", title, None, sessions),
-        };
-        for s in members {
-            if !first {
-                println!(",");
-            }
-            first = false;
-            let cwd = s
-                .cwd
-                .as_ref()
-                .map(|c| format!("\"{}\"", escape_json(c)))
-                .unwrap_or_else(|| "null".into());
-            let mg = gid
-                .as_ref()
-                .map(|g| format!("\"{}\"", escape_json(g)))
-                .unwrap_or_else(|| "null".into());
-            let pri = state.priority_for(&s).as_str();
-            print!(
-                "  {{\"provider\":\"{}\",\"id\":\"{}\",\"title\":\"{}\",\"cwd\":{},\"agent\":\"{}\",\"attention\":\"{}\",\"priority\":\"{}\",\"section_kind\":\"{}\",\"section_title\":\"{}\",\"manual_group_id\":{},\"is_focused\":{}}}",
-                escape_json(&s.provider),
-                escape_json(&s.id),
-                escape_json(&s.title),
-                cwd,
-                escape_json(s.agent.as_str()),
-                escape_json(s.attention.as_str()),
-                escape_json(pri),
-                kind,
-                escape_json(&gtitle),
-                mg,
-                s.is_focused,
-            );
-        }
-    }
-    println!();
-    println!("]");
+    let raw = crate::list_json::sessions_to_json_string(sessions, state);
+    println!("{raw}");
 }
 
 pub(crate) fn cmd_hints(provider: &dyn TerminalProvider, action: HintsCmd) -> Result<()> {
@@ -774,19 +734,6 @@ pub(crate) fn cmd_watch(
         }
         thread::sleep(interval);
     }
-}
-
-fn escape_json(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| match c {
-            '"' => vec!['\\', '"'],
-            '\\' => vec!['\\', '\\'],
-            '\n' => vec!['\\', 'n'],
-            '\r' => vec!['\\', 'r'],
-            '\t' => vec!['\\', 't'],
-            c => vec![c],
-        })
-        .collect()
 }
 
 fn chrono_like_now() -> String {

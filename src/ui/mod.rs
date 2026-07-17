@@ -403,10 +403,13 @@ impl PanelState {
     fn rebuild_views(&mut self) {
         let q = self.filter_query.trim();
         let filtering = !q.is_empty();
+        // Noise filter for list only — queue always uses full all_sessions.
+        let hide = filter::hide_idle_shells_enabled(None);
+        let listed = filter::apply_noise_filter(&self.all_sessions, hide);
         let filtered: Vec<ProviderSession> = if filtering {
-            filter::filter_sessions(&self.all_sessions, &self.user_state, q)
+            filter::filter_sessions(&listed, &self.user_state, q)
         } else {
-            self.all_sessions.clone()
+            listed
         };
         let full_queue = build_action_queue(&self.all_sessions, &self.user_state);
         self.action_queue = if filtering {
