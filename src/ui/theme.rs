@@ -120,7 +120,16 @@ pub fn tinted_bg(c: Color32, alpha: u8) -> Color32 {
 pub fn section_header(ui: &mut egui::Ui, icon: &str, title: &str, meta: &str, color: Color32) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(icon).color(color).size(13.0));
+        // ASCII-safe markers — some system fonts tofu fancy bullets.
+        let mark = match icon {
+            "◆" => "♦",
+            "▶" => ">",
+            "◎" => "@",
+            "☰" => "=",
+            "✦" => "*",
+            other => other,
+        };
+        ui.label(RichText::new(mark).color(color).size(13.0).strong());
         ui.label(RichText::new(title).strong().size(13.0).color(FG));
         if !meta.is_empty() {
             ui.label(RichText::new(meta).small().color(FG_DIM));

@@ -477,22 +477,18 @@ impl PanelState {
             .filter(|s| matches!(s, DisplaySection::Manual { .. }))
             .count();
         self.path_suggestions = hints::suggestions(&self.all_sessions, &self.user_state);
+        // Keep status for actions only — live stats live in header chips.
+        // Soft status when idle so we don't compete with the chip row.
         if filtering {
-            self.status = format!(
-                "filter `{q}` · {shown}/{} · queue {} · hints {} · live",
-                self.session_count,
-                self.action_queue.len(),
-                self.path_suggestions.len()
-            );
-        } else {
-            self.status = format!(
-                "{} session(s) · queue {} · {} manual · {} hint(s) · live",
-                self.session_count,
-                self.action_queue.len(),
-                n_manual,
-                self.path_suggestions.len()
-            );
+            self.status = format!("filter · {shown}/{} shown", self.session_count);
+        } else if self.status.starts_with("filter ·")
+            || self.status.contains(" session(s) ·")
+            || self.status.ends_with(" · live")
+            || self.status == "starting…"
+        {
+            self.status.clear();
         }
+        let _ = n_manual; // used when filtering status; chips own the rest
         self.ensure_selection_if_needed();
     }
 
@@ -867,10 +863,11 @@ impl eframe::App for PanelState {
                         if ui.small_button("Refresh").clicked() {
                             self.apply_snapshot();
                         }
+                        // Avoid fancy arrows — many fonts render them as tofu □.
                         let tools_label = if self.show_tools {
-                            "Tools ▾"
+                            "Hide tools"
                         } else {
-                            "Tools ▸"
+                            "Tools"
                         };
                         if ui
                             .small_button(tools_label)
@@ -905,10 +902,10 @@ impl eframe::App for PanelState {
                     }
                 });
 
-                // Status line
+                // Action/feedback line only (not live counters — those are chips).
                 if !self.status.is_empty() {
                     ui.add_space(4.0);
-                    ui.label(RichText::new(&self.status).small().color(th::FG_DIM));
+                    ui.label(RichText::new(&self.status).small().color(th::AMBER));
                 }
 
                 // Filter — always visible
@@ -1252,13 +1249,7 @@ impl eframe::App for PanelState {
                                     } else {
                                         format!("{} tabs · manual", sessions.len())
                                     };
-                                    th::section_header(
-                                        ui,
-                                        "◆",
-                                        &group.title,
-                                        &tab_meta,
-                                        th::AMBER,
-                                    );
+                                    th::section_header(ui, "◆", &group.title, &tab_meta, th::AMBER);
                                     for (mi, s) in sessions.iter().enumerate() {
                                         let is_sel = selected == Some((si, mi));
                                         let pri = pri_lookup

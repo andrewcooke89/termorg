@@ -193,9 +193,10 @@ pub(super) fn session_row(
         action = RowAction::Focus;
     }
     resp.clone().on_hover_text(format!(
-        "{}\n{}\n{}\n{}",
+        "id        {}\nprovider  {}\nref       {}\ncwd       {}\nattention {}",
         s.id,
         s.provider,
+        ref_id,
         s.cwd.as_deref().unwrap_or("—"),
         s.attention.label()
     ));
