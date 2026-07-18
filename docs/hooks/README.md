@@ -63,22 +63,12 @@ Copy [`examples/grok-hooks-termorg.json`](../../examples/grok-hooks-termorg.json
 
 ### Codex
 
-Add a hooks entry in `~/.codex/hooks.json` (trust via `/hooks` in Codex):
+Copy [`examples/codex-hooks-termorg.json`](../../examples/codex-hooks-termorg.json)
+into `~/.codex/hooks.json` (or merge). Codex uses a **three-level** shape:
+`event → matcher group → nested hooks`. Trust via Codex `/hooks`.
 
-```json
-{
-  "hooks": {
-    "Notification": [{ "type": "command", "command": "termorg hook" }],
-    "PermissionRequest": [{ "type": "command", "command": "termorg hook" }],
-    "Stop": [{ "type": "command", "command": "termorg hook" }],
-    "PreToolUse": [{ "type": "command", "command": "termorg hook" }],
-    "UserPromptSubmit": [{ "type": "command", "command": "termorg hook" }],
-    "SessionEnd": [{ "type": "command", "command": "termorg hook" }]
-  }
-}
-```
-
-Exact Codex schema may wrap commands in arrays per version — if the file is rejected, mirror Claude’s nested `{ "hooks": [ { "type": "command", "command": "termorg hook" } ] }` shape from the Claude example.
+Supported events wired there: `PermissionRequest`, `Stop`, `PreToolUse`,
+`PostToolUse`, `UserPromptSubmit` (not every Claude event name exists in Codex).
 
 ### Kilo
 

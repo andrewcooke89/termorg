@@ -40,6 +40,11 @@ struct KittyWindow {
     /// Kitty shell integration: true when shell is sitting at a prompt.
     #[serde(default)]
     at_prompt: Option<bool>,
+    /// Whether this window is the focused one in its tab.
+    #[serde(default)]
+    is_focused: bool,
+    #[serde(default)]
+    is_self_focus: bool,
     #[serde(default)]
     foreground_processes: Vec<KittyForeground>,
 }
@@ -69,7 +74,7 @@ pub(super) fn parse_kitty_ls(
         for tab in osw.tabs {
             let title = tab_title(&tab);
             let cwd = resolve_tab_cwd(&tab);
-            let focus_window_id = tab.windows.first().map(|w| w.id);
+            let focus_window_id = focused_window_id(&tab);
             let (pids, cmdlines) = collect_proc_hints(&tab);
             let agent = agent::classify_session(&pids, &cmdlines, &title);
             let at_prompt = tab_at_prompt(&tab);
@@ -104,6 +109,14 @@ pub(super) fn parse_kitty_ls(
         }
     }
     Ok(sessions)
+}
+
+fn focused_window_id(tab: &KittyTab) -> Option<u32> {
+    tab.windows
+        .iter()
+        .find(|w| w.is_focused || w.is_self_focus)
+        .or_else(|| tab.windows.first())
+        .map(|w| w.id)
 }
 
 fn tab_at_prompt(tab: &KittyTab) -> Option<bool> {

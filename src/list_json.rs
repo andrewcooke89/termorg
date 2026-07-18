@@ -183,6 +183,7 @@ mod tests {
             manual_group_id: Some("g1".into()),
             priority: Priority::Important,
             explicit_priority: true,
+            suppress_sticky_group: false,
             cwd: s.cwd.clone(),
             title: Some(s.title.clone()),
             updated_at: 1,
@@ -222,5 +223,47 @@ mod tests {
         for key in REQUIRED_KEYS {
             assert!(obj.contains_key(*key), "missing {key}");
         }
+    }
+
+    #[test]
+    fn golden_fixture_shape() {
+        let mut state = UserState::default();
+        state.manual_groups.push(ManualGroup {
+            id: "g1".into(),
+            title: "Trading".into(),
+            sort_index: 0,
+        });
+        let s = sess("tmux:default:@9", "tmux", "main", "/home/u/proj");
+        state.session_prefs.push(SessionPref {
+            provider: "tmux".into(),
+            match_rule: SessionMatch::ProviderId { id: s.id.clone() },
+            manual_group_id: Some("g1".into()),
+            priority: Priority::Muted,
+            explicit_priority: true,
+            suppress_sticky_group: false,
+            cwd: s.cwd.clone(),
+            title: Some(s.title.clone()),
+            updated_at: 1,
+        });
+        let rows = sessions_to_json(std::slice::from_ref(&s), &state);
+        let golden = serde_json::json!([{
+            "provider": "tmux",
+            "id": "tmux:default:@9",
+            "title": "main",
+            "cwd": "/home/u/proj",
+            "agent": "claude",
+            "attention": "needs_you",
+            "priority": "muted",
+            "focused": true,
+            "is_focused": true,
+            "group": "Trading",
+            "group_id": "g1",
+            "manual_group_id": "g1",
+            "section_kind": "manual",
+            "section_title": "Trading"
+        }]);
+        assert_eq!(serde_json::to_value(&rows).unwrap(), golden);
+        let back: Vec<SessionJson> = serde_json::from_value(golden).unwrap();
+        assert_eq!(back, rows);
     }
 }

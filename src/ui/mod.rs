@@ -19,8 +19,7 @@ use crate::filter::{self, session_matches};
 use crate::hints::{self, PathHintSuggestion};
 use crate::notify::NotifyTracker;
 use crate::provider::{
-    session_matches_native_id, LaunchKind, LaunchRequest, MultiProvider, ProviderKind,
-    ProviderSession, TerminalProvider,
+    LaunchKind, LaunchRequest, MultiProvider, ProviderKind, ProviderSession, TerminalProvider,
 };
 use crate::queue::build_action_queue;
 use crate::store::{
@@ -89,28 +88,39 @@ pub fn run_panel(
     }
 
     let snapshot: Arc<Mutex<Option<Snapshot>>> = Arc::new(Mutex::new(None));
+    let refresh_now = Arc::new(AtomicBool::new(true));
     let refresh_quit = Arc::clone(&quit_flag);
     {
         let snapshot = Arc::clone(&snapshot);
+        let refresh_now = Arc::clone(&refresh_now);
         thread::spawn(move || {
             crate::notify::ensure_default_config();
             crate::ambient::ensure_default_config();
             let mut notifier = NotifyTracker::new();
             let mut ambient = crate::ambient::AmbientApplier::new();
             while !refresh_quit.load(Ordering::Relaxed) {
+                let _force = refresh_now.swap(false, Ordering::Relaxed);
                 let result = match provider.list_sessions() {
-                    Ok(sessions) => {
-                        let state = load_and_rebind(&sessions).unwrap_or_default();
-                        // FS11: rising-edge needs_you → desktop notify (skip focused/muted).
-                        notifier.process(&sessions, &state);
-                        // FS12: tab/window color/title from agent + attention.
-                        ambient.apply_all(&provider, &sessions);
-                        Ok((sessions, state))
-                    }
+                    Ok(sessions) => match load_and_rebind(&sessions) {
+                        Ok(state) => {
+                            notifier.process(&sessions, &state);
+                            ambient.apply_all(&provider, &sessions);
+                            Ok((sessions, state))
+                        }
+                        Err(e) => {
+                            eprintln!("termorg panel: state error: {e}");
+                            // Keep live sessions visible with empty prefs.
+                            Ok((sessions, UserState::default()))
+                        }
+                    },
                     Err(e) => Err(e.to_string()),
                 };
                 if let Ok(mut slot) = snapshot.lock() {
                     *slot = Some(result);
+                }
+                // Fast path when Refresh requested; otherwise normal cadence.
+                if refresh_now.load(Ordering::Relaxed) {
+                    continue;
                 }
                 thread::sleep(REFRESH);
             }
@@ -118,7 +128,15 @@ pub fn run_panel(
     }
 
     let focus_note: FocusNote = Arc::new(Mutex::new(None));
-    let state = PanelState::new(snapshot, show_flag, quit_flag, focus_note, kind, kitty_to);
+    let state = PanelState::new(
+        snapshot,
+        show_flag,
+        quit_flag,
+        focus_note,
+        kind,
+        kitty_to,
+        refresh_now,
+    );
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -200,6 +218,8 @@ struct PanelState {
     kitty_to: Option<String>,
     /// Expand groups / launch tools in the top bar.
     show_tools: bool,
+    /// Request an immediate provider poll from the refresh worker.
+    refresh_now: Arc<AtomicBool>,
 }
 
 impl PanelState {
@@ -210,6 +230,7 @@ impl PanelState {
         focus_note: FocusNote,
         provider_kind: ProviderKind,
         kitty_to: Option<String>,
+        refresh_now: Arc<AtomicBool>,
     ) -> Self {
         let mut s = Self {
             snapshot,
@@ -235,9 +256,22 @@ impl PanelState {
             provider_kind,
             kitty_to,
             show_tools: false,
+            refresh_now,
         };
         s.apply_snapshot();
         s
+    }
+
+    fn apply_user_state(&mut self, st: UserState, status: String) {
+        self.user_state = st;
+        self.manual_groups = self
+            .user_state
+            .ordered_groups()
+            .into_iter()
+            .cloned()
+            .collect();
+        self.status = status;
+        self.rebuild_views();
     }
 
     fn provider_counts(&self) -> (usize, usize, usize) {
@@ -348,19 +382,7 @@ impl PanelState {
                         if let Ok(sessions) = provider.list_sessions() {
                             let found = sessions
                                 .iter()
-                                .find(|s| {
-                                    result
-                                        .native_id
-                                        .as_ref()
-                                        .is_some_and(|nid| session_matches_native_id(s, nid))
-                                })
-                                .or_else(|| {
-                                    sessions.iter().find(|s| {
-                                        result.window_id.is_some()
-                                            && s.focus_window_id == result.window_id
-                                    })
-                                })
-                                .or_else(|| sessions.iter().find(|s| s.cwd == result.cwd));
+                                .find(|s| crate::provider::session_matches_launch(s, &result));
                             if let Some(session) = found {
                                 match UserState::load() {
                                     Ok(mut st) => {
@@ -669,8 +691,8 @@ impl PanelState {
                     self.status = format!("save failed: {e}");
                     return;
                 }
-                self.status = format!("assigned {} → {}", session.id, group_id_or_title);
-                self.manual_groups = st.ordered_groups().into_iter().cloned().collect();
+                let msg = format!("assigned {} → {}", session.id, group_id_or_title);
+                self.apply_user_state(st, msg);
             }
             Err(e) => self.status = format!("load state: {e}"),
         }
@@ -688,7 +710,8 @@ impl PanelState {
                     self.status = format!("save failed: {e}");
                     return;
                 }
-                self.status = format!("unassigned {}", session.id);
+                let msg = format!("unassigned {}", session.id);
+                self.apply_user_state(st, msg);
             }
             Err(e) => self.status = format!("load state: {e}"),
         }
@@ -706,7 +729,8 @@ impl PanelState {
                     self.status = format!("save failed: {e}");
                     return;
                 }
-                self.status = format!("priority {} → {}", session.id, priority.as_str());
+                let msg = format!("priority {} → {}", session.id, priority.as_str());
+                self.apply_user_state(st, msg);
             }
             Err(e) => self.status = format!("load state: {e}"),
         }
@@ -725,9 +749,9 @@ impl PanelState {
                     self.status = format!("save failed: {e}");
                     return;
                 }
-                self.status = format!("created group {}", g.title);
                 self.new_group_name.clear();
-                self.manual_groups = st.ordered_groups().into_iter().cloned().collect();
+                let msg = format!("created group {}", g.title);
+                self.apply_user_state(st, msg);
             }
             Err(e) => self.status = format!("load state: {e}"),
         }
@@ -748,8 +772,8 @@ impl PanelState {
                     self.status = format!("save failed: {e}");
                     return;
                 }
-                self.status = format!("deleted group {title} (tabs unassigned, not closed)");
-                self.manual_groups = st.ordered_groups().into_iter().cloned().collect();
+                let msg = format!("deleted group {title} (tabs unassigned, not closed)");
+                self.apply_user_state(st, msg);
             }
             Err(e) => self.status = format!("load state: {e}"),
         }
@@ -856,7 +880,8 @@ impl eframe::App for PanelState {
                             self.request_quit(ctx);
                         }
                         if ui.small_button("Refresh").clicked() {
-                            self.apply_snapshot();
+                            self.refresh_now.store(true, Ordering::Relaxed);
+                            self.status = "refreshing…".into();
                         }
                         // Avoid fancy arrows — many fonts render them as tofu □.
                         let tools_label = if self.show_tools {

@@ -19,7 +19,7 @@ and **jump** to what needs you next.
 ## Requirements
 
 - Linux (developed on Ubuntu + GNOME Wayland)
-- [Rust](https://rustup.rs/) (1.75+)
+- [Rust](https://rustup.rs/) (1.85+)
 - At least one of:
   - [Kitty](https://sw.kovidgoyal.net/kitty/) with remote control
   - [tmux](https://github.com/tmux/tmux) with a running server

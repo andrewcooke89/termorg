@@ -1,29 +1,62 @@
 {
-  "_comment": "Codex hooks → termorg. Merge into ~/.codex/hooks.json (or equivalent). Trust via Codex /hooks. Command receives lifecycle JSON on stdin.",
+  "_comment": "Codex hooks → termorg. Merge into ~/.codex/hooks.json (or project hooks). Shape: event → matcher groups → nested hooks. Trust via Codex /hooks UI.",
   "hooks": {
-    "Notification": [
-      { "type": "command", "command": "termorg hook" }
-    ],
     "PermissionRequest": [
-      { "type": "command", "command": "termorg hook" }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "termorg hook",
+            "timeout": 10
+          }
+        ]
+      }
     ],
     "Stop": [
-      { "type": "command", "command": "termorg hook" }
-    ],
-    "StopFailure": [
-      { "type": "command", "command": "termorg hook" }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "termorg hook",
+            "timeout": 10
+          }
+        ]
+      }
     ],
     "PreToolUse": [
-      { "type": "command", "command": "termorg hook" }
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "termorg hook",
+            "timeout": 10
+          }
+        ]
+      }
     ],
     "PostToolUse": [
-      { "type": "command", "command": "termorg hook" }
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "termorg hook",
+            "timeout": 10
+          }
+        ]
+      }
     ],
     "UserPromptSubmit": [
-      { "type": "command", "command": "termorg hook" }
-    ],
-    "SessionEnd": [
-      { "type": "command", "command": "termorg hook" }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "termorg hook",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

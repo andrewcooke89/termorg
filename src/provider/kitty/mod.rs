@@ -163,8 +163,11 @@ impl TerminalProvider for KittyProvider {
         if sessions.is_empty() && !errors.is_empty() {
             return Err(TermorgError::ProviderUnavailable {
                 provider: PROVIDER_ID.into(),
-                message: "No Kitty remote-control sockets found.\n\nEach Kitty OS window needs its own listen socket. In kitty.conf:\n  allow_remote_control socket-only\n  listen_on unix:${HOME}/.cache/kitty/control-{kitty_pid}.sock\n\nRestart Kitty after changing listen_on."
-                .to_string(),
+                message: format!(
+                    "Kitty remote control failed on discovered socket(s):\n  {}\n\n\
+                     Ensure allow_remote_control / listen_on in kitty.conf, then restart Kitty.",
+                    errors.join("\n  ")
+                ),
             });
         }
 
@@ -318,5 +321,27 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert!(sessions[0].id.starts_with("99:"));
         assert_eq!(sessions[0].focus_tab_id, Some(2));
+        assert_eq!(sessions[0].focus_window_id, Some(3));
+    }
+
+    #[test]
+    fn prefers_focused_window_in_tab() {
+        let raw = r#"[{
+            "id": 1,
+            "tabs": [{
+                "id": 2,
+                "title": "split",
+                "is_focused": true,
+                "windows": [
+                    {"id": 10, "title": "left", "cwd": "/a", "is_focused": false,
+                     "foreground_processes": [{"pid": 1, "cmdline": ["zsh"]}]},
+                    {"id": 11, "title": "right", "cwd": "/b", "is_focused": true,
+                     "foreground_processes": [{"pid": 2, "cmdline": ["claude"]}]}
+                ]
+            }]
+        }]"#;
+        let sessions = parse_kitty_ls(raw, "1", "unix:/tmp/c.sock").unwrap();
+        assert_eq!(sessions[0].focus_window_id, Some(11));
+        assert_eq!(sessions[0].cwd.as_deref(), Some("/a")); // first window cwd still used for tab
     }
 }

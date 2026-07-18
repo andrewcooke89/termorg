@@ -1,7 +1,7 @@
 # Contributing to termorg
 
-Thanks for your interest. This project is early: Kitty is the primary terminal
-backend; multi-provider support is planned.
+Thanks for your interest. termorg is a personal open-source **session control
+plane** for Kitty tabs and tmux windows (not a terminal emulator).
 
 ## Development
 
@@ -12,10 +12,14 @@ cargo test
 cargo build --release
 ```
 
-### Kitty for integration testing
+Requires **Rust 1.85+** (see `rust-version` in `Cargo.toml`).
 
-Remote control must be enabled (see README). Unit tests do not require a live
-Kitty instance; live commands (`list`, `panel`, `launch`) do.
+### Integration testing
+
+| Backend | Notes |
+|---------|--------|
+| **Kitty** | Remote control sockets required for live `list`/`panel`/`launch` (see README). Unit tests do not need Kitty. |
+| **tmux** | Isolated-server unit test creates a disposable `-L` socket. Live CLI: `TERMORG_TMUX_SOCKET`. |
 
 ## Pull requests
 
@@ -30,15 +34,12 @@ Kitty instance; live commands (`list`, `panel`, `launch`) do.
 |------|------|
 | `src/lib.rs` | Library root |
 | `src/cli/` | CLI args and command handlers |
-| `src/provider/` | Terminal backends (`kitty/` is the reference) |
+| `src/provider/` | Terminal backends (`kitty/`, `tmux/`, `multi`) |
 | `src/ui/` | Ops panel (eframe) |
 | `src/attention.rs` | Attention classification |
 | `src/signals.rs` | Agent hook signal store |
-| `src/store.rs` | Persisted groups/prefs/hints |
+| `src/store.rs` | Persisted groups/prefs/sticky path rules |
+| `src/list_json.rs` | Stable `list --json` contract |
+| `src/persist.rs` | Locked atomic JSON writes |
 | `docs/product/` | Product design freeze |
 | `examples/` | Hook config snippets |
-
-## License
-
-By contributing, you agree that your contributions are licensed under the MIT
-License (see `LICENSE`).

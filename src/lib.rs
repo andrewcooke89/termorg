@@ -13,6 +13,7 @@ pub mod hints;
 pub mod list_json;
 pub mod notify;
 pub mod path_group;
+pub mod persist;
 pub mod provider;
 pub mod queue;
 pub mod signals;
@@ -21,6 +22,6 @@ pub mod ui;
 
 pub use error::{Result, TermorgError};
 pub use provider::{
-    session_matches_native_id, KittyProvider, LaunchKind, LaunchRequest, MultiProvider,
-    ProviderKind, ProviderSession, TerminalProvider, TmuxProvider,
+    session_matches_launch, session_matches_native_id, KittyProvider, LaunchKind, LaunchRequest,
+    MultiProvider, ProviderKind, ProviderSession, TerminalProvider, TmuxProvider,
 };

@@ -5,7 +5,6 @@
 //! every tab sharing a cwd (important when work is tab-centric on Wayland).
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -95,6 +94,9 @@ pub struct SessionPref {
     /// Keeps a Normal-only pref so it can shadow sticky path mute across reloads.
     #[serde(default)]
     pub explicit_priority: bool,
+    /// When true, do not apply sticky path→group for this tab (after unassign).
+    #[serde(default)]
+    pub suppress_sticky_group: bool,
     /// For rebind after restart when the tab id changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
@@ -109,6 +111,7 @@ impl SessionPref {
         self.manual_group_id.is_some()
             || self.priority != Priority::Normal
             || self.explicit_priority
+            || self.suppress_sticky_group
     }
 }
 
@@ -166,7 +169,10 @@ impl UserState {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let raw = fs::read_to_string(&path).map_err(TermorgError::Io)?;
+        let raw = crate::persist::read_json_file(&path)?;
+        if raw.trim().is_empty() {
+            return Ok(Self::default());
+        }
         let mut state: UserState = serde_json::from_str(&raw).map_err(|e| TermorgError::Parse {
             message: format!("state file {}: {e}", path.display()),
         })?;
@@ -186,16 +192,13 @@ impl UserState {
 
     pub fn save(&self) -> Result<()> {
         let path = state_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(TermorgError::Io)?;
-        }
         let raw = serde_json::to_string_pretty(self).map_err(|e| TermorgError::Parse {
             message: format!("serialize state: {e}"),
         })?;
-        let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, raw).map_err(TermorgError::Io)?;
-        fs::rename(&tmp, &path).map_err(TermorgError::Io)?;
-        Ok(())
+        crate::persist::update_json_file(&path, |buf| {
+            *buf = raw.clone();
+            Ok(())
+        })
     }
 
     pub fn create_group(&mut self, title: &str) -> ManualGroup {
@@ -268,11 +271,13 @@ impl UserState {
 
     /// Live membership: per-tab pref first, else sticky path→group rule.
     pub fn manual_group_for(&self, session: &ProviderSession) -> Option<String> {
-        if let Some(gid) = self
-            .pref_for(session)
-            .and_then(|p| p.manual_group_id.clone())
-        {
-            return Some(gid);
+        if let Some(p) = self.pref_for(session) {
+            if p.suppress_sticky_group {
+                return p.manual_group_id.clone(); // None after unassign
+            }
+            if let Some(ref gid) = p.manual_group_id {
+                return Some(gid.clone());
+            }
         }
         self.sticky_group_for_session(session)
     }
@@ -335,6 +340,7 @@ impl UserState {
             })?;
         self.touch_pref(session, |p| {
             p.manual_group_id = Some(gid.clone());
+            p.suppress_sticky_group = false;
         });
         // FS15 + sticky: learn path → group and auto-apply for future tabs.
         if let Some((path_key, _)) = crate::hints::path_key_for_session(session) {
@@ -435,25 +441,21 @@ impl UserState {
     }
 
     /// Drop hints pointing at deleted groups (keep mute-only empty group_id).
-    pub fn prune_stale_hints(&mut self) {
+    /// Returns true if anything was removed.
+    pub fn prune_stale_hints(&mut self) -> bool {
+        let before = self.path_hints.len();
         let gids: HashSet<&str> = self.manual_groups.iter().map(|g| g.id.as_str()).collect();
         self.path_hints
             .retain(|h| h.group_id.is_empty() || gids.contains(h.group_id.as_str()));
+        self.path_hints.len() != before
     }
 
     pub fn unassign(&mut self, session: &ProviderSession) {
-        // Clear group only; keep priority if non-normal.
-        let mut drop = false;
-        if let Some(p) = self.pref_for_mut(session) {
+        // Clear group and suppress sticky re-apply for this tab only.
+        self.touch_pref(session, |p| {
             p.manual_group_id = None;
-            p.updated_at = now_secs();
-            if !p.is_meaningful() {
-                drop = true;
-            }
-        }
-        if drop {
-            self.remove_pref(session);
-        }
+            p.suppress_sticky_group = true;
+        });
     }
 
     pub fn set_priority(&mut self, session: &ProviderSession, priority: Priority) {
@@ -508,6 +510,7 @@ impl UserState {
                 manual_group_id: None,
                 priority: Priority::Normal,
                 explicit_priority: false,
+                suppress_sticky_group: false,
                 cwd: session.cwd.clone(),
                 title: Some(session.title.clone()),
                 updated_at: now,
@@ -757,7 +760,9 @@ fn attention_rank(a: crate::attention::Attention) -> u8 {
 pub fn load_and_rebind(live: &[ProviderSession]) -> Result<UserState> {
     let mut state = UserState::load()?;
     let mut dirty = state.rebind_stale_session_ids(live);
-    state.prune_stale_hints();
+    if state.prune_stale_hints() {
+        dirty = true;
+    }
     // Soft-learn from existing assigns if map empty (first run after upgrade).
     if state.path_hints.is_empty()
         && state
@@ -769,7 +774,7 @@ pub fn load_and_rebind(live: &[ProviderSession]) -> Result<UserState> {
         dirty = true;
     }
     if dirty {
-        let _ = state.save();
+        state.save()?;
     }
     Ok(state)
 }
@@ -810,9 +815,9 @@ mod tests {
         // Sticky path rule auto-applies to sibling under same path.
         assert_eq!(state.manual_group_for(&b).as_deref(), Some(gid.as_str()));
 
-        // Unassign clears only per-tab pref; sticky still covers a and b.
+        // Unassign opts this tab out of sticky; sibling still inherits.
         state.unassign(&a);
-        assert_eq!(state.manual_group_for(&a).as_deref(), Some(gid.as_str()));
+        assert!(state.manual_group_for(&a).is_none());
         assert_eq!(state.manual_group_for(&b).as_deref(), Some(gid.as_str()));
     }
 
@@ -874,6 +879,7 @@ mod tests {
             manual_group_id: None,
             priority: Priority::Normal,
             explicit_priority: false,
+            suppress_sticky_group: false,
             cwd: s.cwd.clone(),
             title: Some(s.title.clone()),
             updated_at: 1,
@@ -899,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn unassign_one_tab_leaves_other_pref_sticky_covers_both() {
+    fn unassign_suppresses_sticky_for_that_tab_only() {
         let mut state = UserState::default();
         state.create_group("Trading");
         let a = sess("w1:t1", "/tmp/repo-unassign", "bash");
@@ -907,8 +913,8 @@ mod tests {
         state.assign(&a, "Trading").unwrap();
         state.assign(&b, "Trading").unwrap();
         state.unassign(&a);
-        // a loses per-tab pref but sticky path still assigns.
-        assert!(state.manual_group_for(&a).is_some());
+        // a opts out of sticky; b still sticky/pref assigned.
+        assert!(state.manual_group_for(&a).is_none());
         assert!(state.manual_group_for(&b).is_some());
     }
 

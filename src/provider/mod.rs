@@ -138,6 +138,40 @@ pub struct LaunchResult {
     pub native_id: Option<String>,
 }
 
+/// Exact launch rematch: native id **and** endpoint/session identity.
+/// Never falls back to cwd alone (would mis-assign sticky path groups).
+pub fn session_matches_launch(session: &ProviderSession, result: &LaunchResult) -> bool {
+    let id_ok = if let Some(ref nid) = result.native_id {
+        session_matches_native_id(session, nid)
+    } else if let Some(wid) = result.window_id {
+        session.focus_window_id == Some(wid)
+    } else {
+        return false;
+    };
+    if !id_ok {
+        return false;
+    }
+    launch_endpoint_matches(session, &result.endpoint)
+}
+
+fn launch_endpoint_matches(session: &ProviderSession, endpoint: &str) -> bool {
+    if endpoint.is_empty() {
+        return true;
+    }
+    if session.focus_endpoint.as_deref() == Some(endpoint) {
+        return true;
+    }
+    // tmux launch endpoint is session name; focus_endpoint is socket tag.
+    if session.provider == "tmux" {
+        if let Some(ref key) = session.focus_key {
+            if let Some((sess, _, _)) = crate::provider::tmux::TmuxProvider::parse_focus_key(key) {
+                return sess == endpoint;
+            }
+        }
+    }
+    false
+}
+
 /// Exact match of a listed session against a launch `native_id`.
 ///
 /// Must **not** use substring search: tmux `@1` must not match `@10`/`@11`/…

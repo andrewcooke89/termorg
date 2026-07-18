@@ -194,6 +194,7 @@ mod tests {
             manual_group_id: Some("g1".into()),
             priority: crate::store::Priority::Normal,
             explicit_priority: false,
+            suppress_sticky_group: false,
             cwd: Some("/tmp/proj-b".into()),
             title: None,
             updated_at: 0,

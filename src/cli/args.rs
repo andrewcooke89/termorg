@@ -33,10 +33,10 @@ pub(crate) enum Commands {
         #[arg(long, short = 'q')]
         filter: Option<String>,
         /// Hide idle shell sessions from the list (not the action queue).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "show_idle_shells")]
         hide_idle_shells: bool,
         /// Show idle shells even if TERMORG_HIDE_IDLE_SHELLS=1.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "hide_idle_shells")]
         show_idle_shells: bool,
     },
     Watch {

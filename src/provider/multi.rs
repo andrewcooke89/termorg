@@ -55,23 +55,12 @@ impl MultiProvider {
         match kind {
             ProviderKind::Kitty => Ok(Self::Kitty(kitty())),
             ProviderKind::Tmux => Ok(Self::Tmux(TmuxProvider::new())),
-            ProviderKind::All => {
-                let k = kitty();
-                let t = TmuxProvider::new();
-                let k_ok = k.list_sessions().is_ok();
-                let t_ok = t.list_sessions().is_ok();
-                match (k_ok, t_ok) {
-                    (true, true) => Ok(Self::Both { kitty: k, tmux: t }),
-                    (true, false) => Ok(Self::Kitty(k)),
-                    (false, true) => Ok(Self::Tmux(t)),
-                    (false, false) => Err(TermorgError::ProviderUnavailable {
-                        provider: "all".into(),
-                        message: "neither Kitty nor tmux is available \
-                             (enable Kitty remote control and/or start a tmux session)"
-                            .into(),
-                    }),
-                }
-            }
+            // Keep both backends for All so a long-running panel can discover
+            // a provider that was down at open (list merges partial failures).
+            ProviderKind::All => Ok(Self::Both {
+                kitty: kitty(),
+                tmux: TmuxProvider::new(),
+            }),
         }
     }
 }

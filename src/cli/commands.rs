@@ -287,7 +287,13 @@ pub(crate) fn cmd_list(
     hide_idle_shells: Option<bool>,
 ) -> Result<()> {
     let sessions = provider.list_sessions()?;
-    let state = load_and_rebind(&sessions).unwrap_or_default();
+    let state = match load_and_rebind(&sessions) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("termorg: warning: could not load state ({e}); using empty prefs");
+            UserState::default()
+        }
+    };
     let hide = filter::hide_idle_shells_enabled(hide_idle_shells);
     let sessions = filter::apply_noise_filter(&sessions, hide);
     let sessions = match filter_q {
@@ -579,18 +585,31 @@ pub(crate) fn cmd_launch(
     );
 
     if let Some(g) = group {
-        // Best-effort: wait briefly, find new session, assign group.
-        thread::sleep(Duration::from_millis(400));
-        if let Ok(sessions) = provider.list_sessions() {
-            let found = find_launched_session(&sessions, &result);
-            if let Some(session) = found {
-                let mut state = UserState::load()?;
-                state.assign(session, g)?;
-                state.save()?;
-                println!("assigned {} → {g}", session.id);
+        // Retry exact native-id rematch; never assign via cwd guess.
+        let mut found = None;
+        for attempt in 0..8 {
+            if attempt > 0 {
+                thread::sleep(Duration::from_millis(150));
             } else {
-                eprintln!("termorg: launched but could not match session for group assign yet");
+                thread::sleep(Duration::from_millis(350));
             }
+            if let Ok(sessions) = provider.list_sessions() {
+                if let Some(session) = find_launched_session(&sessions, &result) {
+                    found = Some(session.clone());
+                    break;
+                }
+            }
+        }
+        if let Some(session) = found {
+            let mut state = UserState::load()?;
+            state.assign(&session, g)?;
+            state.save()?;
+            println!("assigned {} → {g}", session.id);
+        } else {
+            eprintln!(
+                "termorg: launched but exact session rematch pending (native={:?}) — assign manually",
+                result.native_id
+            );
         }
     }
     Ok(())
@@ -600,39 +619,16 @@ fn find_launched_session<'a>(
     sessions: &'a [provider::ProviderSession],
     result: &provider::LaunchResult,
 ) -> Option<&'a provider::ProviderSession> {
-    // Exact native_id match only — never substring (`@1` must not hit `@10`).
-    if let Some(ref nid) = result.native_id {
-        if let Some(s) = sessions
-            .iter()
-            .find(|s| provider::session_matches_native_id(s, nid))
-        {
-            return Some(s);
-        }
-    }
-    if let Some(wid) = result.window_id {
-        // Exact numeric window id; prefer endpoint agreement when available.
-        if let Some(s) = sessions.iter().find(|s| {
-            s.focus_window_id == Some(wid)
-                && (s.focus_endpoint.as_deref() == Some(result.endpoint.as_str())
-                    || result.endpoint.is_empty()
-                    || s.provider == "tmux") // tmux endpoint is session name, not socket tag
-        }) {
-            return Some(s);
-        }
-        if let Some(s) = sessions.iter().find(|s| s.focus_window_id == Some(wid)) {
-            return Some(s);
-        }
-    }
-    // Fallback: matching cwd (prefer agent class)
-    let mut candidates: Vec<_> = sessions
+    // Exact provider/endpoint/native identity only — never cwd fallback.
+    let mut hits: Vec<_> = sessions
         .iter()
-        .filter(|s| match (&result.cwd, &s.cwd) {
-            (Some(a), Some(b)) => a == b,
-            (None, _) => true,
-            _ => false,
-        })
+        .filter(|s| provider::session_matches_launch(s, result))
         .collect();
-    candidates.sort_by_key(|s| {
+    if hits.len() == 1 {
+        return Some(hits.remove(0));
+    }
+    // If multiple (rare), prefer matching launch kind agent class.
+    hits.sort_by_key(|s| {
         let agent_ok = match result.kind {
             LaunchKind::Shell => s.agent.as_str() == "shell" || s.agent.as_str() == "unknown",
             LaunchKind::Claude => s.agent.as_str() == "claude",
@@ -642,7 +638,7 @@ fn find_launched_session<'a>(
         };
         (!agent_ok, s.id.as_str())
     });
-    candidates.into_iter().next()
+    hits.into_iter().next()
 }
 
 pub(crate) fn cmd_watch(

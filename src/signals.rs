@@ -9,7 +9,6 @@
 //! Stored under `~/.config/termorg/signals.json`, matched to tabs via
 //! KITTY_PID + KITTY_WINDOW_ID (preferred) or cwd (fallback).
 
-use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -114,32 +113,26 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn load_file() -> SignalFile {
-    let path = signals_path();
-    let Ok(raw) = fs::read_to_string(&path) else {
-        return SignalFile {
-            schema: SCHEMA,
-            signals: Vec::new(),
-        };
-    };
-    serde_json::from_str(&raw).unwrap_or(SignalFile {
+fn empty_file() -> SignalFile {
+    SignalFile {
         schema: SCHEMA,
         signals: Vec::new(),
-    })
+    }
 }
 
-fn save_file(file: &SignalFile) -> Result<()> {
-    let path = signals_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+fn parse_file_raw(raw: &str) -> SignalFile {
+    if raw.trim().is_empty() {
+        return empty_file();
     }
-    let raw = serde_json::to_string_pretty(file).map_err(|e| TermorgError::Parse {
-        message: format!("serialize signals: {e}"),
-    })?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, raw.as_bytes())?;
-    fs::rename(&tmp, &path)?;
-    Ok(())
+    serde_json::from_str(raw).unwrap_or_else(|_| empty_file())
+}
+
+fn load_file() -> SignalFile {
+    let path = signals_path();
+    match crate::persist::read_json_file(&path) {
+        Ok(raw) => parse_file_raw(&raw),
+        Err(_) => empty_file(),
+    }
 }
 
 fn is_fresh(sig: &AgentSignal, now: u64) -> bool {
@@ -234,24 +227,29 @@ pub fn record(mut sig: AgentSignal) -> Result<()> {
     if sig.ttl_secs == 0 {
         sig.ttl_secs = DEFAULT_TTL_SECS;
     }
-    let mut file = load_file();
-    file.schema = SCHEMA;
-    let now = now_secs();
-    file.signals.retain(|s| is_fresh(s, now));
+    let path = signals_path();
+    crate::persist::update_json_file(&path, |raw| {
+        let mut file = parse_file_raw(raw);
+        file.schema = SCHEMA;
+        let now = now_secs();
+        file.signals.retain(|s| is_fresh(s, now));
 
-    let idx = file.signals.iter().position(|s| same_slot(s, &sig));
-    if let Some(i) = idx {
-        file.signals[i] = sig;
-    } else {
-        file.signals.push(sig);
-    }
-    // Cap size
-    if file.signals.len() > 256 {
-        file.signals
-            .sort_by_key(|s| std::cmp::Reverse(s.updated_at));
-        file.signals.truncate(256);
-    }
-    save_file(&file)
+        let idx = file.signals.iter().position(|s| same_slot(s, &sig));
+        if let Some(i) = idx {
+            file.signals[i] = sig.clone();
+        } else {
+            file.signals.push(sig.clone());
+        }
+        if file.signals.len() > 256 {
+            file.signals
+                .sort_by_key(|s| std::cmp::Reverse(s.updated_at));
+            file.signals.truncate(256);
+        }
+        *raw = serde_json::to_string_pretty(&file).map_err(|e| TermorgError::Parse {
+            message: format!("serialize signals: {e}"),
+        })?;
+        Ok(())
+    })
 }
 
 fn same_slot(a: &AgentSignal, b: &AgentSignal) -> bool {
@@ -501,6 +499,7 @@ pub fn record_manual(state: SignalState, reason: &str) -> Result<AgentSignal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::sync::Mutex;
 
     static LOCK: Mutex<()> = Mutex::new(());
